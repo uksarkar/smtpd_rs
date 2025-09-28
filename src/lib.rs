@@ -477,6 +477,55 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         session.from = from.to_string();
                         controller.write_response(&Response::ok("Ok")).await?;
                     }
+                    "RCPT" => {
+                        if config.require_tls
+                            && config.tls_config.is_some()
+                            && !controller.stream.is_tls()
+                        {
+                            controller
+                                .write_response(&Response::reject(
+                                    "Must issue a STARTTLS command first",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        if config.require_auth && !session.authenticated {
+                            controller
+                                .write_response(&Response::reject("Authentication required"))
+                                .await?;
+                            continue;
+                        }
+
+                        if session.from.len() == 0 {
+                            controller
+                                .write_response(&Response::bad_sequence(
+                                    "Bad sequence of commands (MAIL required before RCPT)",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        if config.max_recipients < session.to.len() {
+                            controller
+                                .write_response(&Response::new(
+                                    452,
+                                    "Max recipient limit exceeded",
+                                    Some("4.5.3".into()),
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default());
+                        if to.is_none() {
+                            controller.write_response(&Response::syntax_error("Syntax error in parameters or arguments (invalid TO parameter)")).await?;
+                            continue;
+                        }
+
+                        session.to.push(to.unwrap().to_string());
+                        controller.write_response(&Response::ok("Ok")).await?;
+                    }
                     _ => {
                         controller
                             .write_response(&Response::syntax_error("Unrecognizable command"))
