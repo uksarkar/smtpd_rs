@@ -1,6 +1,16 @@
 [package]
-name = "smtpd-rs2"
+name = "smtpd-rs"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+native-tls = { version = "0.2.14", optional = true }
+rustls = { version = "0.23.32", optional = true }
+tokio = { version = "1.47.1", features = ["full"] }
+tokio-native-tls = { version = "0.3.1", optional = true }
+tokio-rustls = { version = "0.26.4", optional = true }
+
+[features]
+default = []
+native-tls-backend = ["dep:native-tls", "dep:tokio-native-tls"]
+rustls-backend = ["dep:rustls", "dep:tokio-rustls"]
