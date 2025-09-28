@@ -20,10 +20,12 @@ pub struct SmtpConfig {
     pub hostname: String,
     pub bind_addr: String,
     pub tls_config: Option<TlsConfig>,
+    pub require_tls: bool,
     pub max_message_size: Option<usize>,
     pub max_recipients: Option<usize>,
     pub timeout: Duration,
     pub auth_machs: Vec<AuthMach>,
+    pub require_auth: bool
 }
 
 impl Default for SmtpConfig {
@@ -39,7 +41,9 @@ impl Default for SmtpConfig {
             max_message_size: Some(10 * 1024 * 1024), // 10MB
             timeout: Duration::from_secs(30),
             max_recipients: Some(100),
-            auth_machs: vec![]
+            auth_machs: vec![],
+            require_tls: false,
+            require_auth: false,
         }
     }
 }

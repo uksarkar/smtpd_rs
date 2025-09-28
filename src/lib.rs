@@ -2,6 +2,7 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose;
 use std::fmt::Write;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
@@ -321,6 +322,83 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         controller
                             .write_response(&Response::not_implemented())
                             .await?;
+                    }
+                    "DATA" => {
+                        if config.require_tls && !controller.stream.is_tls() {
+                            controller
+                                .write_response(&Response::reject(
+                                    "Must issue a STARTTLS command first",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        if config.require_auth && !session.authenticated {
+                            controller
+                                .write_response(&Response::reject("Authentication required"))
+                                .await?;
+                            continue;
+                        }
+
+                        if session.from.len() == 0 || session.to.len() == 0 {
+                            controller
+                                .write_response(&Response::bad_sequence(
+                                    "Bad sequence of commands (MAIL & RCPT required before DATA)",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        controller
+                            .write_line("354 Start mail input; end with <CR><LF>.<CR><LF>")
+                            .await?;
+
+                        // TODO: handle max message size limit error
+                        let data = controller.read_mail_data(config.max_message_size).await?;
+
+                        // TODO: handle data
+                        let data_str = String::from_utf8_lossy(&data);
+                        println!("{}", data_str);
+
+                        controller
+                            .write_response(&Response::ok("Ok: queued"))
+                            .await?;
+                    }
+                    "XCLIENT" => {
+                        session.x_client = args.unwrap_or_default().to_string();
+
+                        for item in session.x_client.split_whitespace() {
+                            if let Some((k, v)) = item.trim().split_once("=") {
+                                let k = k.to_ascii_uppercase();
+
+                                if k == "ADDR" && std::net::IpAddr::from_str(v).is_ok() {
+                                    session.x_client_addr.clear();
+                                    session.x_client_addr.push_str(v);
+                                }
+
+                                if k == "NAME" && !v.is_empty() && v != "[UNAVAILABLE]" {
+                                    session.x_client_name.clear();
+                                    session.x_client_name.push_str(v);
+                                }
+                            }
+                        }
+
+                        if session.x_client_addr.len() > 7 {
+                            session.remote_ip = session.x_client_addr.to_owned();
+
+                            if session.x_client_name.len() > 4 {
+                                session.remote_host = session.x_client_name.to_owned();
+                            } else {
+                                session.remote_host =
+                                    std::net::IpAddr::from_str(&session.remote_ip)
+                                        .ok()
+                                        .and_then(|ip| dns_lookup::lookup_addr(&ip).ok())
+                                        .filter(|host| !host.is_empty())
+                                        .unwrap_or_else(|| "unknown".to_string());
+                            }
+                        }
+
+                        controller.write_response(&Response::ok("Ok")).await?;
                     }
                     _ => {
                         controller

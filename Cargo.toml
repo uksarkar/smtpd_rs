@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 base64 = "0.22.1"
+dns-lookup = "3.0.0"
 hostname = "0.4.1"
 lazy_static = "1.5.0"
 native-tls = { version = "0.2.14", optional = true }

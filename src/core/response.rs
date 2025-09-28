@@ -68,6 +68,10 @@ impl Response {
         Self::new(502, "Command not implemented", Some("5.5.1".into()))
     }
 
+    pub fn bad_sequence(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(503, message, Some("5.5.1".into()))
+    }
+
     pub(crate) fn raw(res: String) -> Self {
         Self {
             status: 0,
