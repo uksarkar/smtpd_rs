@@ -6,12 +6,17 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
+pub mod auth;
 pub mod error;
+pub mod response;
+pub mod session;
 pub mod stream;
 pub mod tls;
 
 // SMTP Server Configuration
+#[derive(Debug, Clone)]
 pub struct SmtpConfig {
+    pub hostname: String,
     pub bind_addr: String,
     pub tls_config: Option<TlsConfig>,
     pub max_message_size: Option<usize>,
@@ -21,8 +26,13 @@ pub struct SmtpConfig {
 
 impl Default for SmtpConfig {
     fn default() -> Self {
+        let hostname = hostname::get()
+            .map(|s| s.into_string().unwrap_or_default())
+            .unwrap_or("unknown".into());
+
         Self {
             bind_addr: "127.0.0.1:25".to_string(),
+            hostname,
             tls_config: None,
             max_message_size: Some(10 * 1024 * 1024), // 10MB
             timeout: Duration::from_secs(30),

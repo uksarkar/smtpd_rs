@@ -5,11 +5,13 @@ use tokio::time::timeout;
 
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
+use crate::core::response::Response;
+use crate::core::session::Session;
 pub use crate::core::tls::TlsConfig;
 
+mod constants;
 mod core;
 mod utils;
-mod constants;
 
 // SMTP Server
 pub struct SmtpServer {
@@ -44,6 +46,7 @@ impl SmtpServer {
 
 async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()> {
     let mut controller = core::stream::StreamController::new(ConnectionStream::Tcp(stream));
+    let mut session = Session::new(&config);
 
     // Send greeting
     controller
@@ -57,24 +60,18 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
         buffer.clear();
 
         // Read command with timeout
-        match timeout(
-            config.timeout,
-            controller.read_line_trimmed(&mut buffer),
-        )
-        .await
-        {
+        match timeout(config.timeout, controller.read_line_trimmed(&mut buffer)).await {
             Ok(Ok(())) => {
-                // Process command
-                let command = buffer.trim().to_uppercase();
+                let (command, args) = utils::parser::parse_cmd(&buffer.trim());
 
                 match command.as_str() {
                     "STARTTLS" => {
                         if controller.stream.is_tls() {
                             controller.write_line("503 Already in TLS mode").await?;
-                            continue;
+                            // continue;
                         }
 
-                        match &config.tls_config {
+                        match &session.smtp_config.tls_config {
                             Some(tls_config) => {
                                 controller.write_line("220 Ready to start TLS").await?;
 
@@ -85,51 +82,59 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                                 match res {
                                     Ok(_) => {
                                         println!("TLS upgrade successful");
+                                        continue;
                                     }
                                     Err(e) => {
                                         eprintln!("TLS upgrade failed: {}", e);
-                                        controller.write_line("454 TLS negotiation failed").await?;
+
+                                        controller
+                                            .write_response(&Response::new(
+                                                454,
+                                                "TLS negotiation failed",
+                                                None,
+                                            ))
+                                            .await?;
+
                                         break;
                                     }
-                                }
+                                };
                             }
                             None => {
-                                controller.write_line("502 TLS not available").await?;
+                                controller
+                                    .write_response(&Response::new(502, "TLS not available", None))
+                                    .await?;
                             }
                         }
                     }
                     "QUIT" => {
-                        controller.write_line("221 Bye").await?;
+                        controller
+                            .write_response(&Response::new(221, "Bye", None))
+                            .await?;
                         break;
                     }
-                    "EHLO" | "HELO" => {
-                        let response = if controller.stream.is_tls() {
-                            format!("250-localhost\r\n250-STARTTLS\r\n250 AUTH PLAIN")
-                        } else {
-                            format!("250-localhost\r\n250-STARTTLS\r\n250 AUTH PLAIN")
-                        };
-                        controller.write_line(&response).await?;
+                    "HELO" => {
+                        // RFC 2821 section 4.1.4 specifies that HELO has the same effect as RSET, so reset for HELO too.
+                        session.reset();
+                        session.remote_name = args.unwrap_or_default().to_string();
+
+                        controller
+                            .write_response(&Response::ok(format!(
+                                "{} greets {}",
+                                session.smtp_config.hostname, session.remote_name
+                            )))
+                            .await?;
                     }
                     "NOOP" => {
-                        controller.write_line("250 OK").await?;
+                        controller.write_response(&Response::ok("OK")).await?;
                     }
                     "RSET" => {
-                        controller.write_line("250 OK").await?;
+                        session.reset();
+                        controller.write_response(&Response::ok("OK")).await?;
                     }
                     _ => {
-                        // Handle other SMTP commands here
-                        if controller.stream.is_tls() {
-                            controller.write_line("250 OK").await?;
-                        } else {
-                            // For non-TLS connections, suggest STARTTLS for sensitive commands
-                            if is_sensitive_command(&command) {
-                                controller
-                                    .write_line("530 Must issue STARTTLS first")
-                                    .await?;
-                            } else {
-                                controller.write_line("250 OK").await?;
-                            }
-                        }
+                        controller
+                            .write_response(&Response::syntax_error("Unrecognizable command"))
+                            .await?;
                     }
                 }
             }
@@ -146,10 +151,6 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
     }
 
     Ok(())
-}
-
-fn is_sensitive_command(command: &str) -> bool {
-    matches!(command, "AUTH" | "MAIL" | "RCPT" | "DATA")
 }
 
 // Convenience function to create server

@@ -5,7 +5,7 @@ pub enum Error {
     Io(std::io::Error),
     InvalidLineEnding,
     MaxSizeExceeded { limit: usize, got: usize },
-    InvalidTCPStream,
+    UnrecognizedAuthMach(String),
     InvalidTLSConfiguration
 }
 
