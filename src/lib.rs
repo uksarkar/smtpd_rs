@@ -72,9 +72,18 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 
                 match command.as_str() {
                     "STARTTLS" => {
+                        if args.is_some_and(|a| a.len() > 0) {
+                            controller
+                                .write_response(&Response::syntax_error(
+                                    "Syntax error (no parameters allowed)",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
                         if controller.stream.is_tls() {
                             controller.write_line("503 Already in TLS mode").await?;
-                            // continue;
+                            continue;
                         }
 
                         match &session.smtp_config.tls_config {
@@ -399,6 +408,11 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         }
 
                         controller.write_response(&Response::ok("Ok")).await?;
+                    }
+                    "HELP" | "VRFY" | "EXPN" => {
+                        controller
+                            .write_response(&Response::not_implemented())
+                            .await?;
                     }
                     _ => {
                         controller
