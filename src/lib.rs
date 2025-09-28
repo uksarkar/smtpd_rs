@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
+use std::fmt::Write;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
@@ -123,6 +124,51 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                                 session.smtp_config.hostname, session.remote_name
                             )))
                             .await?;
+                    }
+                    "EHLO" => {
+                        session.reset();
+                        session.remote_name = args.unwrap_or_default().to_string();
+
+                        let mut message = String::with_capacity(256);
+
+                        // Hostname + greeting
+                        writeln!(
+                            message,
+                            "250-{} greets {}",
+                            session.smtp_config.hostname, session.remote_name
+                        )
+                        .unwrap();
+
+                        // RFC 1870: "SIZE 0" means no limit
+                        writeln!(
+                            message,
+                            "250-SIZE {}",
+                            session.smtp_config.max_message_size.unwrap_or_default()
+                        )
+                        .unwrap();
+
+                        // STARTTLS if enabled
+                        if let Some(_) = session.smtp_config.tls_config {
+                            writeln!(message, "250-STARTTLS").unwrap();
+                        }
+
+                        // AUTH if mechanisms exist
+                        if !session.smtp_config.auth_machs.is_empty() {
+                            let joined = session
+                                .smtp_config
+                                .auth_machs
+                                .iter()
+                                .map(|m| m.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" ");
+
+                            writeln!(message, "250-AUTH {}", joined).unwrap();
+                        }
+
+                        // Final line must not have "-"
+                        message.push_str("250 ENHANCEDSTATUSCODES");
+
+                        controller.write_line(message).await?;
                     }
                     "NOOP" => {
                         controller.write_response(&Response::ok("OK")).await?;

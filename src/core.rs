@@ -1,3 +1,4 @@
+use crate::core::auth::AuthMach;
 use crate::core::error::Error;
 use crate::core::tls::TlsConfig;
 use std::pin::Pin;
@@ -22,6 +23,7 @@ pub struct SmtpConfig {
     pub max_message_size: Option<usize>,
     pub max_recipients: Option<usize>,
     pub timeout: Duration,
+    pub auth_machs: Vec<AuthMach>,
 }
 
 impl Default for SmtpConfig {
@@ -37,6 +39,7 @@ impl Default for SmtpConfig {
             max_message_size: Some(10 * 1024 * 1024), // 10MB
             timeout: Duration::from_secs(30),
             max_recipients: Some(100),
+            auth_machs: vec![]
         }
     }
 }
