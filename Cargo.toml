@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
 native-tls = { version = "0.2.14", optional = true }
 rustls = { version = "0.23.32", optional = true }
 tokio = { version = "1.47.1", features = ["full"] }
