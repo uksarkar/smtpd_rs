@@ -414,6 +414,69 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                             .write_response(&Response::not_implemented())
                             .await?;
                     }
+                    "MAIL" => {
+                        if config.require_tls
+                            && config.tls_config.is_some()
+                            && !controller.stream.is_tls()
+                        {
+                            controller
+                                .write_response(&Response::reject(
+                                    "Must issue a STARTTLS command first",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        if config.require_auth && !session.authenticated {
+                            controller
+                                .write_response(&Response::reject("Authentication required"))
+                                .await?;
+                            continue;
+                        }
+
+                        let res = crate::utils::parser::parse_mail_from(args.unwrap_or_default());
+                        if res.is_none() {
+                            controller
+                                .write_response(&Response::syntax_error(
+                                    "Syntax error in FROM parameter",
+                                ))
+                                .await?;
+                            continue;
+                        }
+
+                        let (from, params) = res.unwrap();
+                        let has_params = params.is_some();
+
+                        let size = match params {
+                            Some(arg_str) => crate::utils::parser::parse_size(arg_str.as_str()),
+                            None => None,
+                        };
+
+                        if has_params && size.is_none() {
+                            controller
+                                .write_response(&Response::syntax_error("Invalid SIZE parameter"))
+                                .await?;
+                            continue;
+                        }
+
+                        if let Some(max_size) = config.max_message_size {
+                            if let Some(s) = size {
+                                if max_size < s {
+                                    controller
+                                        .write_response(&Response::new(
+                                            452,
+                                            "Max size limit exceeded",
+                                            Some("4.5.3".into()),
+                                        ))
+                                        .await?;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        session.from = from.to_string();
+                        controller.write_response(&Response::ok("Ok")).await?;
+                    }
                     _ => {
                         controller
                             .write_response(&Response::syntax_error("Unrecognizable command"))
