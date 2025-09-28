@@ -16,7 +16,7 @@ pub struct SmtpConfig {
     pub tls_config: Option<TlsConfig>,
     pub max_message_size: Option<usize>,
     pub max_recipients: Option<usize>,
-    pub starttls_timeout: Duration,
+    pub timeout: Duration,
 }
 
 impl Default for SmtpConfig {
@@ -25,7 +25,7 @@ impl Default for SmtpConfig {
             bind_addr: "127.0.0.1:25".to_string(),
             tls_config: None,
             max_message_size: Some(10 * 1024 * 1024), // 10MB
-            starttls_timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(30),
             max_recipients: Some(100),
         }
     }

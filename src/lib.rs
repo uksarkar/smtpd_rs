@@ -8,6 +8,8 @@ pub use crate::core::SmtpConfig;
 pub use crate::core::tls::TlsConfig;
 
 mod core;
+mod utils;
+mod constants;
 
 // SMTP Server
 pub struct SmtpServer {
@@ -56,7 +58,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 
         // Read command with timeout
         match timeout(
-            config.starttls_timeout,
+            config.timeout,
             controller.read_line_trimmed(&mut buffer),
         )
         .await

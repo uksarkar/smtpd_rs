@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+hostname = "0.4.1"
+lazy_static = "1.5.0"
 native-tls = { version = "0.2.14", optional = true }
+regex = "1.11.3"
 rustls = { version = "0.23.32", optional = true }
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-native-tls = { version = "0.3.1", optional = true }
