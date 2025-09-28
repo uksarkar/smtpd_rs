@@ -64,6 +64,10 @@ impl Response {
         Self::new(501, message, Some("5.5.4".into()))
     }
 
+    pub fn not_implemented() -> Self {
+        Self::new(502, "Command not implemented", Some("5.5.1".into()))
+    }
+
     pub(crate) fn raw(res: String) -> Self {
         Self {
             status: 0,

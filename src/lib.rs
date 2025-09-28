@@ -1,11 +1,15 @@
 use anyhow::Result;
-use std::sync::Arc;
+use base64::Engine;
+use base64::engine::general_purpose;
 use std::fmt::Write;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
+use crate::core::auth::{AuthData, AuthMach};
 use crate::core::response::Response;
 use crate::core::session::Session;
 pub use crate::core::tls::TlsConfig;
@@ -176,6 +180,147 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                     "RSET" => {
                         session.reset();
                         controller.write_response(&Response::ok("OK")).await?;
+                    }
+                    "AUTH" => {
+                        let res = AuthMach::from_str(&args.unwrap_or_default());
+                        if res.is_err() {
+                            controller
+                                .write_response(&Response::new(
+                                    504,
+                                    format!("Unrecognized authentication type"),
+                                    Some("5.5.4".into()),
+                                ))
+                                .await?;
+                            break;
+                        }
+
+                        let (mach, line) = res.unwrap();
+
+                        let mut line = line.unwrap_or_default().to_string();
+                        let mut data: Option<AuthData> = None;
+
+                        match mach {
+                            AuthMach::Plain => {
+                                if line.is_empty() {
+                                    controller
+                                        .write_response(&Response::new(334, " ", None))
+                                        .await?;
+
+                                    line.clear();
+                                    controller.read_line_trimmed(&mut line).await?;
+                                }
+
+                                let parsed_data = utils::parser::parse_b64_line(&line)?;
+
+                                let parts: Vec<&[u8]> = parsed_data.split(|&b| b == 0).collect();
+
+                                if parts.len() != 3 {
+                                    controller
+                                        .write_response(&Response::syntax_error(
+                                            "Syntax error (unable to parse)",
+                                        ))
+                                        .await?;
+                                    break;
+                                }
+
+                                data = Some(AuthData::Plain {
+                                    username: String::from_utf8_lossy(parts[1]).to_string(),
+                                    password: String::from_utf8_lossy(parts[2]).to_string(),
+                                });
+                            }
+                            AuthMach::Login => {
+                                if line.is_empty() {
+                                    let encoded = general_purpose::STANDARD.encode("Username:");
+                                    controller
+                                        .write_response(&Response::new(334, encoded, None))
+                                        .await?;
+
+                                    line.clear();
+                                    controller.read_line_trimmed(&mut line).await?;
+                                }
+
+                                let username = utils::parser::parse_b64_line(&line)?;
+
+                                let encoded = general_purpose::STANDARD.encode("Password:");
+                                controller
+                                    .write_response(&Response::new(334, encoded, None))
+                                    .await?;
+
+                                line.clear();
+                                controller.read_line_trimmed(&mut line).await?;
+
+                                let password = utils::parser::parse_b64_line(&line)?;
+
+                                data = Some(AuthData::Login {
+                                    username: String::from_utf8_lossy(&username).to_string(),
+                                    password: String::from_utf8_lossy(&password).to_string(),
+                                });
+                            }
+                            AuthMach::CramMD5 => {
+                                let shared = format!(
+                                    "<{}.{}@{}>",
+                                    std::process::id(),
+                                    SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_nanos(),
+                                    session.smtp_config.hostname
+                                );
+
+                                let encoded = general_purpose::STANDARD.encode(&shared);
+                                controller
+                                    .write_response(&Response::new(334, encoded, None))
+                                    .await?;
+
+                                line.clear();
+                                controller.read_line_trimmed(&mut line).await?;
+
+                                if line == "*" {
+                                    controller
+                                        .write_response(&Response::syntax_error(
+                                            "Authentication cancelled",
+                                        ))
+                                        .await?;
+                                    break;
+                                }
+
+                                let buf = utils::parser::parse_b64_line(&line)?;
+                                let fields: Vec<&[u8]> = buf.split(|&b| b == b' ').collect();
+
+                                if fields.len() < 2 {
+                                    controller
+                                        .write_response(&Response::syntax_error(
+                                            "Syntax error (unable to parse)",
+                                        ))
+                                        .await?;
+                                    break;
+                                }
+
+                                data = Some(AuthData::CramMD5 {
+                                    username: String::from_utf8_lossy(fields[0]).to_string(),
+                                    password: String::from_utf8_lossy(fields[1]).to_string(),
+                                    shared,
+                                });
+                            }
+                        };
+
+                        if data.is_none() {
+                            controller
+                                .write_response(&Response::new(
+                                    535,
+                                    "Authentication credentials invalid",
+                                    Some("5.7.8".into()),
+                                ))
+                                .await?;
+                            break;
+                        }
+
+                        session.auth_data = data;
+
+                        // TODO
+                        controller
+                            .write_response(&Response::not_implemented())
+                            .await?;
                     }
                     _ => {
                         controller
