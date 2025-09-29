@@ -1,28 +1,38 @@
 use std::fmt;
 
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 
-use crate::{core::error::Error};
+use crate::{
+    TlsConfig,
+    core::{ConnectionStream, error::Error},
+};
 
 // StreamController with proper generics
-pub struct StreamController<S> {
-    pub(crate) stream: S,
+pub struct StreamController {
+    pub reader: BufReader<ReadHalf<ConnectionStream>>,
+    pub writer: BufWriter<WriteHalf<ConnectionStream>>,
 }
 
-impl<S> StreamController<S> {
-    pub fn new(stream: S) -> Self {
-        Self { stream }
+impl StreamController {
+    pub fn new(stream: ConnectionStream) -> Self {
+        let (read_half, write_half) = tokio::io::split(stream);
+        Self {
+            reader: BufReader::new(read_half),
+            writer: BufWriter::new(write_half),
+        }
     }
-}
 
-impl<S> StreamController<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+    pub async fn upgrade_to_tls(self, config: &TlsConfig) -> (Self, Result<(), Error>) {
+        let stream = self.reader.into_inner().unsplit(self.writer.into_inner());
+        let (stream, res) = stream.upgrade_to_tls(config).await;
+
+        (Self::new(stream), res)
+    }
+
     pub async fn write_line(&mut self, line: impl AsRef<str>) -> Result<(), Error> {
-        self.stream.write_all(line.as_ref().as_bytes()).await?;
-        self.stream.write_all(b"\r\n").await?;
-        self.stream.flush().await?;
+        self.writer.write_all(line.as_ref().as_bytes()).await?;
+        self.writer.write_all(b"\r\n").await?;
+        self.writer.flush().await?;
         Ok(())
     }
 
@@ -31,9 +41,8 @@ where
     }
 
     pub async fn read_line_trimmed(&mut self, dist: &mut String) -> Result<(), Error> {
-        let mut reader = BufReader::new(&mut self.stream);
         dist.clear();
-        reader.read_line(dist).await?;
+        self.reader.read_line(dist).await?;
 
         let start_trimmed = dist.trim_start();
         let start_len_diff = dist.len() - start_trimmed.len();
@@ -51,18 +60,19 @@ where
     }
 
     pub async fn read_line_crlf(&mut self, buffer: &mut Vec<u8>) -> Result<(), Error> {
-        let mut reader = BufReader::new(&mut self.stream);
         buffer.clear();
-        reader.read_until(b'\n', buffer).await?;
+        self.reader.read_until(b'\n', buffer).await?;
 
         if buffer.ends_with(b"\r\n") {
             Ok(())
         } else if buffer.ends_with(b"\n") {
-            buffer.pop();
+            // Convert LF to CRLF if needed
+            buffer.pop(); // remove LF
             if buffer.ends_with(b"\r") {
-                buffer.push(b'\n');
+                buffer.push(b'\n'); // add LF back
                 Ok(())
             } else {
+                // Insert CR before LF
                 buffer.push(b'\r');
                 buffer.push(b'\n');
                 Ok(())

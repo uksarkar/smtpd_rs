@@ -10,9 +10,9 @@ use tokio::time::timeout;
 
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
-use crate::core::auth::{AuthData, AuthMach};
-use crate::core::response::Response;
-use crate::core::session::Session;
+pub use crate::core::auth::{AuthData, AuthMach};
+pub use crate::core::response::Response;
+pub use crate::core::session::Session;
 pub use crate::core::tls::TlsConfig;
 
 mod constants;
@@ -81,7 +81,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                             continue;
                         }
 
-                        if controller.stream.is_tls() {
+                        if session.tls {
                             controller.write_line("503 Already in TLS mode").await?;
                             continue;
                         }
@@ -90,13 +90,15 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                             Some(tls_config) => {
                                 controller.write_line("220 Ready to start TLS").await?;
 
-                                let (stream, res) =
-                                    controller.stream.upgrade_to_tls(tls_config).await;
-                                controller.stream = stream;
+                                let (new_ctrl, res) = controller.upgrade_to_tls(&tls_config).await;
+                                controller = new_ctrl;
 
                                 match res {
                                     Ok(_) => {
                                         println!("TLS upgrade successful");
+                                        session.tls = true;
+
+                                        controller.write_response(&Response::ok("OK")).await?;
                                     }
                                     Err(e) => {
                                         eprintln!("TLS upgrade failed: {}", e);
@@ -332,7 +334,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                             .await?;
                     }
                     "DATA" => {
-                        if config.require_tls && !controller.stream.is_tls() {
+                        if config.require_tls && !session.tls {
                             controller
                                 .write_response(&Response::reject(
                                     "Must issue a STARTTLS command first",
@@ -417,10 +419,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                             .await?;
                     }
                     "MAIL" => {
-                        if config.require_tls
-                            && config.tls_config.is_some()
-                            && !controller.stream.is_tls()
-                        {
+                        if config.require_tls && config.tls_config.is_some() && !session.tls {
                             controller
                                 .write_response(&Response::reject(
                                     "Must issue a STARTTLS command first",
@@ -480,10 +479,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         controller.write_response(&Response::ok("Ok")).await?;
                     }
                     "RCPT" => {
-                        if config.require_tls
-                            && config.tls_config.is_some()
-                            && !controller.stream.is_tls()
-                        {
+                        if config.require_tls && config.tls_config.is_some() && !session.tls {
                             controller
                                 .write_response(&Response::reject(
                                     "Must issue a STARTTLS command first",
