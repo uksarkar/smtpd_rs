@@ -56,7 +56,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 
     // Send greeting
     controller
-        .write_line("220 localhost ESMTP Service Ready")
+        .write_line(format!("220 {} ESMTP Service Ready", config.hostname))
         .await?;
 
     let mut buffer = String::new();
@@ -97,7 +97,6 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                                 match res {
                                     Ok(_) => {
                                         println!("TLS upgrade successful");
-                                        continue;
                                     }
                                     Err(e) => {
                                         eprintln!("TLS upgrade failed: {}", e);
@@ -162,7 +161,7 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         .unwrap();
 
                         // STARTTLS if enabled
-                        if let Some(_) = session.smtp_config.tls_config {
+                        if session.smtp_config.tls_config.is_some() {
                             writeln!(message, "250-STARTTLS").unwrap();
                         }
 
