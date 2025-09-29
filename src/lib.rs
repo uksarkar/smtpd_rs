@@ -377,14 +377,17 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 
                         for item in session.x_client.split_whitespace() {
                             if let Some((k, v)) = item.trim().split_once("=") {
-                                let k = k.to_ascii_uppercase();
-
-                                if k == "ADDR" && std::net::IpAddr::from_str(v).is_ok() {
+                                if k.eq_ignore_ascii_case("ADDR")
+                                    && std::net::IpAddr::from_str(v).is_ok()
+                                {
                                     session.x_client_addr.clear();
                                     session.x_client_addr.push_str(v);
                                 }
 
-                                if k == "NAME" && !v.is_empty() && v != "[UNAVAILABLE]" {
+                                if k.eq_ignore_ascii_case("NAME")
+                                    && !v.is_empty()
+                                    && !v.eq_ignore_ascii_case("[UNAVAILABLE]")
+                                {
                                     session.x_client_name.clear();
                                     session.x_client_name.push_str(v);
                                 }
