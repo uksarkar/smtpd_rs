@@ -384,6 +384,14 @@ async fn handle_auth_cmd<'a>(
     }
 
     let (mach, line) = res.unwrap();
+    if !session.smtp_config.auth_machs.contains(&mach) {
+        controller
+            .write_response(&Response::Raw(
+                "504 5.5.4 Unrecognized authentication type".into(),
+            ))
+            .await?;
+        return Err(Error::InvalidData.into());
+    }
 
     let mut line = line.unwrap_or_default().to_string();
     let data: Option<AuthData>;

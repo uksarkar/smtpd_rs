@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{core::error::Error, utils};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AuthMach {
     Plain,
     Login,
