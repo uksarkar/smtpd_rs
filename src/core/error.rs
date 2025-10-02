@@ -6,7 +6,8 @@ pub enum Error {
     InvalidLineEnding,
     MaxSizeExceeded { limit: usize, got: usize },
     UnrecognizedAuthMach(String),
-    InvalidTLSConfiguration
+    InvalidTLSConfiguration,
+    InvalidData
 }
 
 impl From<std::io::Error> for Error {

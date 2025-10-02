@@ -52,3 +52,18 @@ pub enum AuthData {
         shared: String,
     },
 }
+
+impl AuthData {
+    pub fn data(&self) -> (&str, &str, Option<&str>) {
+        match self {
+            Self::Login { username, password } | Self::Plain { username, password } => {
+                (username, password, None)
+            }
+            Self::CramMD5 {
+                username,
+                password,
+                shared,
+            } => (username, password, Some(shared)),
+        }
+    }
+}

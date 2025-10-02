@@ -11,6 +11,8 @@ use tokio::time::timeout;
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
 pub use crate::core::auth::{AuthData, AuthMach};
+pub use crate::core::error::Error;
+pub use crate::core::handler::{SmtpHandler, SmtpHandlerFactory};
 pub use crate::core::response::Response;
 pub use crate::core::session::Session;
 use crate::core::stream::StreamController;
@@ -21,13 +23,17 @@ mod core;
 mod utils;
 
 // SMTP Server
-pub struct SmtpServer {
+pub struct SmtpServer<T: SmtpHandlerFactory + Send + Sync + 'static> {
     config: SmtpConfig,
+    handler: Arc<T>,
 }
 
-impl SmtpServer {
-    pub fn new(config: SmtpConfig) -> Self {
-        Self { config }
+impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
+    pub fn new(config: SmtpConfig, handler: T) -> Self {
+        Self {
+            config,
+            handler: Arc::new(handler),
+        }
     }
 
     pub async fn listen_and_serve(self) -> Result<()> {
@@ -35,15 +41,17 @@ impl SmtpServer {
         println!("SMTP server listening on {}", self.config.bind_addr);
 
         let config = Arc::new(self.config);
+        let handler = Arc::clone(&self.handler); // for moving into async block
 
         loop {
             let (stream, peer_addr) = listener.accept().await?;
             println!("New connection from {}", peer_addr);
 
             let config = Arc::clone(&config);
+            let handler = Arc::clone(&handler);
 
             tokio::spawn(async move {
-                if let Err(e) = handle_client(stream, config).await {
+                if let Err(e) = handle_client(stream, config, handler).await {
                     eprintln!("Error handling client {}: {}", peer_addr, e);
                 }
             });
@@ -51,9 +59,14 @@ impl SmtpServer {
     }
 }
 
-async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()> {
-    let mut controller = core::stream::StreamController::new(ConnectionStream::Tcp(stream));
+async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
+    stream: TcpStream,
+    config: Arc<SmtpConfig>,
+    handler_factory: Arc<T>,
+) -> Result<()> {
+    let mut controller = StreamController::new(ConnectionStream::Tcp(stream));
     let mut session = Session::new(&config);
+    let mut handler = handler_factory.new_handler(&session);
 
     // Send greeting
     controller
@@ -152,10 +165,28 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         controller.write_response(&Response::ok("OK")).await?;
                     }
                     "AUTH" => {
-                        let res = handle_auth_cmd(args, &mut session, &mut controller).await?;
+                        if let Ok(()) = handle_auth_cmd(args, &mut session, &mut controller).await {
+                            // safe to unwrap, because the Ok() is guaranteed the data having some value
+                            let auth_data = session.auth_data.as_ref().unwrap();
 
-                        // TODO
-                        controller.write_response(&res).await?;
+                            let resp = match handler.on_auth(&session, auth_data) {
+                                Ok(res) => {
+                                    session.authenticated = true;
+
+                                    if res.is_default() {
+                                        Response::auth_successful()
+                                    } else {
+                                        res
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("{}", e);
+                                    Response::reject("Authentication unsuccessful.")
+                                }
+                            };
+
+                            controller.write_response(&resp).await?;
+                        }
                     }
                     "DATA" => handle_data_cmd(&mut session, &mut controller).await?,
                     "XCLIENT" => {
@@ -227,8 +258,11 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 }
 
 // Convenience function to create server
-pub async fn start_server(config: SmtpConfig) -> Result<()> {
-    let server = SmtpServer::new(config);
+pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
+    config: SmtpConfig,
+    handler: T,
+) -> Result<()> {
+    let server = SmtpServer::new(config, handler);
     server.listen_and_serve().await
 }
 
@@ -292,14 +326,18 @@ async fn handle_auth_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<Response> {
+) -> Result<()> {
     let res = AuthMach::from_str(&args.unwrap_or_default());
     if res.is_err() {
-        return Ok(Response::new(
-            504,
-            format!("Unrecognized authentication type"),
-            Some("5.5.4".into()),
-        ));
+        controller
+            .write_response(&Response::new(
+                504,
+                format!("Unrecognized authentication type"),
+                Some("5.5.4".into()),
+            ))
+            .await?;
+
+        return Err(Error::InvalidData.into());
     }
 
     let (mach, line) = res.unwrap();
@@ -323,7 +361,10 @@ async fn handle_auth_cmd<'a>(
             let parts: Vec<&[u8]> = parsed_data.split(|&b| b == 0).collect();
 
             if parts.len() != 3 {
-                return Ok(Response::syntax_error("Syntax error (unable to parse)"));
+                controller
+                    .write_response(&Response::syntax_error("Syntax error (unable to parse)"))
+                    .await?;
+                return Err(Error::InvalidData.into());
             }
 
             data = Some(AuthData::Plain {
@@ -379,14 +420,20 @@ async fn handle_auth_cmd<'a>(
             controller.read_line_trimmed(&mut line).await?;
 
             if line == "*" {
-                return Ok(Response::syntax_error("Authentication cancelled"));
+                controller
+                    .write_response(&Response::syntax_error("Authentication cancelled"))
+                    .await?;
+                return Err(Error::InvalidData.into());
             }
 
             let buf = utils::parser::parse_b64_line(&line)?;
             let fields: Vec<&[u8]> = buf.split(|&b| b == b' ').collect();
 
             if fields.len() < 2 {
-                return Ok(Response::syntax_error("Syntax error (unable to parse)"));
+                controller
+                    .write_response(&Response::syntax_error("Syntax error (unable to parse)"))
+                    .await?;
+                return Err(Error::InvalidData.into());
             }
 
             data = Some(AuthData::CramMD5 {
@@ -398,16 +445,19 @@ async fn handle_auth_cmd<'a>(
     };
 
     if data.is_none() {
-        return Ok(Response::new(
-            535,
-            "Authentication credentials invalid",
-            Some("5.7.8".into()),
-        ));
+        controller
+            .write_response(&Response::new(
+                535,
+                "Authentication credentials invalid",
+                Some("5.7.8".into()),
+            ))
+            .await?;
+        return Err(Error::InvalidData.into());
     }
 
     session.auth_data = data;
 
-    Ok(Response::not_implemented())
+    Ok(())
 }
 
 async fn handle_mail_cmd<'a>(

@@ -73,4 +73,11 @@ impl Response {
     pub fn bad_sequence(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(503, message, Some("5.5.1".into()))
     }
+
+    pub fn is_default(&self) -> bool {
+        match self {
+            Self::Default => true,
+            _ => false
+        }
+    }
 }
