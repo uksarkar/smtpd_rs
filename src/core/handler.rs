@@ -1,4 +1,4 @@
-use crate::{AuthData, Response, Session, core::error::Error};
+use crate::{AuthData, Response, Session, core::response_error::Error};
 
 pub trait SmtpHandler {
     fn handle_auth(&mut self, _: &Session, _: &AuthData) -> Result<Response, Error> {

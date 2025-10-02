@@ -31,7 +31,7 @@ impl smtpd_rs::SmtpHandler for MyHandler {
             return Ok(smtpd_rs::Response::Default);
         }
 
-        Err(smtpd_rs::Error::InvalidData)
+        Err(smtpd_rs::Error::Abort)
     }
 
     fn handle_rcpt(
@@ -43,7 +43,7 @@ impl smtpd_rs::SmtpHandler for MyHandler {
             return Ok(smtpd_rs::Response::Default);
         }
 
-        Err(smtpd_rs::Error::InvalidData)
+        Err(smtpd_rs::Error::Abort)
     }
 }
 

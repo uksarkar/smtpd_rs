@@ -11,9 +11,10 @@ use tokio::time::timeout;
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
 pub use crate::core::auth::{AuthData, AuthMach};
-pub use crate::core::error::Error;
+use crate::core::error::Error as CoreError;
 pub use crate::core::handler::{SmtpHandler, SmtpHandlerFactory};
 pub use crate::core::response::Response;
+pub use crate::core::response_error::Error;
 pub use crate::core::session::Session;
 use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
@@ -165,49 +166,70 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         controller.write_response(&Response::ok("OK")).await?;
                     }
                     "AUTH" => {
-                        if let Ok(()) = handle_auth_cmd(args, &mut session, &mut controller).await {
-                            // safe to unwrap, because the Ok() is guaranteed the data having some value
-                            let auth_data = session.auth_data.as_ref().unwrap();
+                        match handle_auth_cmd(args, &mut session, &mut controller).await {
+                            Ok(()) => {
+                                // safe to unwrap, because the Ok() is guaranteed the data having some value
+                                let auth_data = session.auth_data.as_ref().unwrap();
 
-                            let resp = match handler.handle_auth(&session, auth_data) {
-                                Ok(res) => {
-                                    session.authenticated = true;
+                                let resp = match handler.handle_auth(&session, auth_data) {
+                                    Ok(res) => {
+                                        session.authenticated = true;
 
-                                    if res.is_default() {
-                                        Response::auth_successful()
-                                    } else {
-                                        res
+                                        if res.is_default() {
+                                            Response::auth_successful()
+                                        } else {
+                                            res
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("{}", e);
+                                        Response::reject("Authentication unsuccessful.")
+                                    }
+                                };
+
+                                controller.write_response(&resp).await?;
+                            }
+                            Err(err) => match err {
+                                CoreError::Response(res) => {
+                                    if !res.is_default() {
+                                        controller.write_response(&res).await?;
                                     }
                                 }
-                                Err(e) => {
-                                    eprintln!("{}", e);
-                                    Response::reject("Authentication unsuccessful.")
-                                }
-                            };
-
-                            controller.write_response(&resp).await?;
-                        }
+                                _ => return Err(err.into()),
+                            },
+                        };
                     }
                     "DATA" => {
-                        let data = handle_data_cmd(&mut session, &mut controller).await?;
-                        let res = match handler.handle_email(&session, data) {
-                            Ok(r) => {
-                                if r.is_default() {
-                                    Response::ok("Ok: queued")
-                                } else {
-                                    r
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("{e}");
-                                Response::Raw(
+                        match handle_data_cmd(&mut session, &mut controller).await {
+                            Ok(data) => {
+                                let res = match handler.handle_email(&session, data) {
+                                    Ok(r) => {
+                                        if r.is_default() {
+                                            Response::ok("Ok: queued")
+                                        } else {
+                                            r
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("{e}");
+                                        Response::Raw(
                                     "451 4.3.0 Requested action aborted: local error in processing"
                                         .into(),
                                 )
-                            }
-                        };
+                                    }
+                                };
 
-                        controller.write_response(&res).await?;
+                                controller.write_response(&res).await?;
+                            }
+                            Err(err) => match err {
+                                CoreError::Response(res) => {
+                                    if !res.is_default() {
+                                        controller.write_response(&res).await?;
+                                    }
+                                }
+                                _ => return Err(err.into()),
+                            },
+                        };
                     }
                     "XCLIENT" => {
                         session.x_client = args.unwrap_or_default().to_string();
@@ -253,30 +275,55 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             .write_response(&Response::not_implemented())
                             .await?;
                     }
-                    "MAIL" => handle_mail_cmd(args, &mut session, &mut controller).await?,
-                    "RCPT" => {
-                        if let Ok(to) = handle_rcpt_cmd(args, &mut session, &mut controller).await {
-                            let res = match handler.handle_rcpt(&session, &to) {
-                                Ok(res) => {
-                                    session.to.push(to);
-
-                                    if res.is_default() {
-                                        Response::Raw("250 2.1.5 Ok".into())
-                                    } else {
-                                        res
+                    "MAIL" => {
+                        if let Err(err) = handle_mail_cmd(args, &mut session, &mut controller).await
+                        {
+                            match err {
+                                CoreError::Response(res) => {
+                                    if !res.is_default() {
+                                        controller.write_response(&res).await?;
                                     }
                                 }
-                                Err(e) => {
-                                    eprintln!("{}", e);
-                                    Response::Raw(
+                                _ => return Err(err.into()),
+                            }
+                        }
+                    }
+                    "RCPT" => {
+                        match handle_rcpt_cmd(args, &mut session).await {
+                            Ok(to) => {
+                                let res = match handler.handle_rcpt(&session, &to) {
+                                    Ok(res) => {
+                                        session.to.push(to);
+
+                                        if res.is_default() {
+                                            Response::Raw("250 2.1.5 Ok".into())
+                                        } else {
+                                            res
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("{}", e);
+                                        Response::Raw(
                                         "550 5.1.0 Requested action not taken: mailbox unavailable"
                                             .into(),
                                     )
-                                }
-                            };
+                                    }
+                                };
 
-                            controller.write_response(&res).await?;
-                        }
+                                controller.write_response(&res).await?;
+                            }
+
+                            Err(err) => {
+                                match err {
+                                    CoreError::Response(res) => {
+                                        if !res.is_default() {
+                                            controller.write_response(&res).await?;
+                                        }
+                                    }
+                                    _ => return Err(err.into()),
+                                };
+                            }
+                        };
                     }
                     _ => {
                         controller
@@ -369,28 +416,21 @@ async fn handle_auth_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<()> {
+) -> std::result::Result<(), CoreError> {
     let res = AuthMach::from_str(&args.unwrap_or_default());
     if res.is_err() {
-        controller
-            .write_response(&Response::new(
-                504,
-                format!("Unrecognized authentication type"),
-                Some("5.5.4".into()),
-            ))
-            .await?;
-
-        return Err(Error::InvalidData.into());
+        return Err(CoreError::Response(Response::new(
+            504,
+            format!("Unrecognized authentication type"),
+            Some("5.5.4".into()),
+        )));
     }
 
     let (mach, line) = res.unwrap();
     if !session.smtp_config.auth_machs.contains(&mach) {
-        controller
-            .write_response(&Response::Raw(
-                "504 5.5.4 Unrecognized authentication type".into(),
-            ))
-            .await?;
-        return Err(Error::InvalidData.into());
+        return Err(CoreError::Response(Response::Raw(
+            "504 5.5.4 Unrecognized authentication type".into(),
+        )));
     }
 
     let mut line = line.unwrap_or_default().to_string();
@@ -412,10 +452,9 @@ async fn handle_auth_cmd<'a>(
             let parts: Vec<&[u8]> = parsed_data.split(|&b| b == 0).collect();
 
             if parts.len() != 3 {
-                controller
-                    .write_response(&Response::syntax_error("Syntax error (unable to parse)"))
-                    .await?;
-                return Err(Error::InvalidData.into());
+                return Err(CoreError::Response(Response::syntax_error(
+                    "Syntax error (unable to parse)",
+                )));
             }
 
             data = Some(AuthData::Plain {
@@ -471,20 +510,18 @@ async fn handle_auth_cmd<'a>(
             controller.read_line_trimmed(&mut line).await?;
 
             if line == "*" {
-                controller
-                    .write_response(&Response::syntax_error("Authentication cancelled"))
-                    .await?;
-                return Err(Error::InvalidData.into());
+                return Err(CoreError::Response(Response::syntax_error(
+                    "Authentication cancelled",
+                )));
             }
 
             let buf = utils::parser::parse_b64_line(&line)?;
             let fields: Vec<&[u8]> = buf.split(|&b| b == b' ').collect();
 
             if fields.len() < 2 {
-                controller
-                    .write_response(&Response::syntax_error("Syntax error (unable to parse)"))
-                    .await?;
-                return Err(Error::InvalidData.into());
+                return Err(CoreError::Response(Response::syntax_error(
+                    "Syntax error (unable to parse)",
+                )));
             }
 
             data = Some(AuthData::CramMD5 {
@@ -496,14 +533,11 @@ async fn handle_auth_cmd<'a>(
     };
 
     if data.is_none() {
-        controller
-            .write_response(&Response::new(
-                535,
-                "Authentication credentials invalid",
-                Some("5.7.8".into()),
-            ))
-            .await?;
-        return Err(Error::InvalidData.into());
+        return Err(CoreError::Response(Response::new(
+            535,
+            "Authentication credentials invalid",
+            Some("5.7.8".into()),
+        )));
     }
 
     session.auth_data = data;
@@ -515,27 +549,24 @@ async fn handle_mail_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<()> {
+) -> std::result::Result<(), CoreError> {
     if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
-        controller
-            .write_response(&Response::reject("Must issue a STARTTLS command first"))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::reject(
+            "Must issue a STARTTLS command first",
+        )));
     }
 
     if session.smtp_config.require_auth && !session.authenticated {
-        controller
-            .write_response(&Response::reject("Authentication required"))
-            .await?;
-        return Ok(());
+        return Err(CoreError::Response(Response::reject(
+            "Authentication required",
+        )));
     }
 
     let res = crate::utils::parser::parse_mail_from(args.unwrap_or_default());
     if res.is_none() {
-        controller
-            .write_response(&Response::syntax_error("Syntax error in FROM parameter"))
-            .await?;
-        return Ok(());
+        return Err(CoreError::Response(Response::syntax_error(
+            "Syntax error in FROM parameter",
+        )));
     }
 
     let (from, params) = res.unwrap();
@@ -547,25 +578,19 @@ async fn handle_mail_cmd<'a>(
     };
 
     if has_params && size.is_none() {
-        controller
-            .write_response(&Response::syntax_error("Invalid SIZE parameter"))
-            .await?;
-
-        return Ok(());
+        return Err(CoreError::Response(Response::syntax_error(
+            "Invalid SIZE parameter",
+        )));
     }
 
     if let Some(max_size) = session.smtp_config.max_message_size {
         if let Some(s) = size {
             if max_size < s {
-                controller
-                    .write_response(&Response::new(
-                        452,
-                        "Max size limit exceeded",
-                        Some("4.5.3".into()),
-                    ))
-                    .await?;
-
-                return Ok(());
+                return Err(CoreError::Response(Response::new(
+                    452,
+                    "Max size limit exceeded",
+                    Some("4.5.3".into()),
+                )));
             }
         }
     }
@@ -580,51 +605,38 @@ async fn handle_mail_cmd<'a>(
 async fn handle_rcpt_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
-    controller: &mut StreamController,
-) -> Result<String> {
+) -> std::result::Result<String, CoreError> {
     if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
-        controller
-            .write_response(&Response::reject("Must issue a STARTTLS command first"))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::reject(
+            "Must issue a STARTTLS command first",
+        )));
     }
 
     if session.smtp_config.require_auth && !session.authenticated {
-        controller
-            .write_response(&Response::reject("Authentication required"))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::reject(
+            "Authentication required",
+        )));
     }
 
     if !session.got_from {
-        controller
-            .write_response(&Response::bad_sequence(
-                "Bad sequence of commands (MAIL required before RCPT)",
-            ))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::bad_sequence(
+            "Bad sequence of commands (MAIL required before RCPT)",
+        )));
     }
 
     if session.smtp_config.max_recipients < session.to.len() {
-        controller
-            .write_response(&Response::new(
-                452,
-                "Max recipient limit exceeded",
-                Some("4.5.3".into()),
-            ))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::new(
+            452,
+            "Max recipient limit exceeded",
+            Some("4.5.3".into()),
+        )));
     }
 
     let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default());
     if to.is_none() {
-        controller
-            .write_response(&Response::syntax_error(
-                "Syntax error in parameters or arguments (invalid TO parameter)",
-            ))
-            .await?;
-
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::syntax_error(
+            "Syntax error in parameters or arguments (invalid TO parameter)",
+        )));
     }
 
     Ok(to.unwrap().to_string())
@@ -633,28 +645,23 @@ async fn handle_rcpt_cmd<'a>(
 async fn handle_data_cmd<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<Vec<u8>> {
+) -> std::result::Result<Vec<u8>, CoreError> {
     if session.smtp_config.require_tls && !session.tls {
-        controller
-            .write_response(&Response::reject("Must issue a STARTTLS command first"))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::reject(
+            "Must issue a STARTTLS command first",
+        )));
     }
 
     if session.smtp_config.require_auth && !session.authenticated {
-        controller
-            .write_response(&Response::reject("Authentication required"))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::reject(
+            "Authentication required",
+        )));
     }
 
     if !session.got_from || session.to.len() == 0 {
-        controller
-            .write_response(&Response::bad_sequence(
-                "Bad sequence of commands (MAIL & RCPT required before DATA)",
-            ))
-            .await?;
-        return Err(Error::Internal.into());
+        return Err(CoreError::Response(Response::bad_sequence(
+            "Bad sequence of commands (MAIL & RCPT required before DATA)",
+        )));
     }
 
     controller

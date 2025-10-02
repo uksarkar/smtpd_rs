@@ -9,6 +9,7 @@ use tokio::net::TcpStream;
 
 pub mod auth;
 pub mod error;
+pub mod response_error;
 pub mod response;
 pub mod session;
 pub mod stream;

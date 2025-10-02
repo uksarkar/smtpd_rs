@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::Response;
+
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
@@ -7,13 +9,19 @@ pub enum Error {
     MaxSizeExceeded { limit: usize, got: usize },
     UnrecognizedAuthMach(String),
     InvalidTLSConfiguration,
-    InvalidData,
-    Internal
+    Response(Response),
+    DecodeErr(base64::DecodeError),
 }
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
+    }
+}
+
+impl From<base64::DecodeError> for Error {
+    fn from(value: base64::DecodeError) -> Self {
+        Self::DecodeErr(value)
     }
 }
 
