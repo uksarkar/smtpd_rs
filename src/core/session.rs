@@ -17,6 +17,7 @@ pub struct Session<'a> {
     pub remote_ip: String,
     pub remote_host: String,
     pub tls: bool,
+    pub(crate) got_from: bool,
 }
 
 impl<'a> Session<'a> {
@@ -24,8 +25,8 @@ impl<'a> Session<'a> {
         Self {
             authenticated: false,
             tls: false,
-            from: String::new(),
-            remote_name: String::new(),
+            from: String::with_capacity(256),
+            remote_name: String::with_capacity(256),
             smtp_config: config,
             to: vec![],
             auth_data: None,
@@ -35,11 +36,13 @@ impl<'a> Session<'a> {
             x_client_addr: "".to_string(),
             x_client_name: "".to_string(),
             x_client_trust: false,
+            got_from: false,
         }
     }
 
     pub fn reset(&mut self) {
-        self.from = "".to_string();
-        self.to = vec![];
+        self.from.clear();
+        self.to.clear();
+        self.got_from = false;
     }
 }

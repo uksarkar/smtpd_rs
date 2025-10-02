@@ -571,6 +571,8 @@ async fn handle_mail_cmd<'a>(
     }
 
     session.from = from.to_string();
+    session.got_from = true;
+    session.to.clear();
     controller.write_response(&Response::ok("Ok")).await?;
     Ok(())
 }
@@ -594,7 +596,7 @@ async fn handle_rcpt_cmd<'a>(
         return Err(Error::Internal.into());
     }
 
-    if session.from.len() == 0 {
+    if !session.got_from {
         controller
             .write_response(&Response::bad_sequence(
                 "Bad sequence of commands (MAIL required before RCPT)",
@@ -646,7 +648,7 @@ async fn handle_data_cmd<'a>(
         return Err(Error::Internal.into());
     }
 
-    if session.from.len() == 0 || session.to.len() == 0 {
+    if !session.got_from || session.to.len() == 0 {
         controller
             .write_response(&Response::bad_sequence(
                 "Bad sequence of commands (MAIL & RCPT required before DATA)",
