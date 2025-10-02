@@ -1,4 +1,3 @@
-use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose;
 use std::fmt::Write;
@@ -37,7 +36,7 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
         }
     }
 
-    pub async fn listen_and_serve(self) -> Result<()> {
+    pub async fn listen_and_serve(self) -> Result<(), std::io::Error> {
         let listener = TcpListener::bind(&self.config.bind_addr).await?;
         println!("SMTP server listening on {}", self.config.bind_addr);
 
@@ -64,7 +63,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     stream: TcpStream,
     config: Arc<SmtpConfig>,
     handler_factory: Arc<T>,
-) -> Result<()> {
+) -> Result<(), CoreError> {
     let mut controller = StreamController::new(ConnectionStream::Tcp(stream));
     let mut session = Session::new(&config);
     let mut handler = handler_factory.new_handler(&session);
@@ -195,7 +194,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                         controller.write_response(&res).await?;
                                     }
                                 }
-                                _ => return Err(err.into()),
+                                _ => return Err(err),
                             },
                         };
                     }
@@ -227,7 +226,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                         controller.write_response(&res).await?;
                                     }
                                 }
-                                _ => return Err(err.into()),
+                                _ => return Err(err),
                             },
                         };
                     }
@@ -284,7 +283,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                         controller.write_response(&res).await?;
                                     }
                                 }
-                                _ => return Err(err.into()),
+                                _ => return Err(err),
                             }
                         }
                     }
@@ -320,7 +319,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                             controller.write_response(&res).await?;
                                         }
                                     }
-                                    _ => return Err(err.into()),
+                                    _ => return Err(err),
                                 };
                             }
                         };
@@ -351,7 +350,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
 pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
     config: SmtpConfig,
     handler: T,
-) -> Result<()> {
+) -> Result<(), std::io::Error> {
     let server = SmtpServer::new(config, handler);
     server.listen_and_serve().await
 }
@@ -361,7 +360,7 @@ async fn handle_start_tls_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: StreamController,
-) -> (StreamController, Result<Response>) {
+) -> (StreamController, Result<Response, CoreError>) {
     // Make the controller mutable
     let mut controller = controller;
 
@@ -416,7 +415,7 @@ async fn handle_auth_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> std::result::Result<(), CoreError> {
+) -> Result<(), CoreError> {
     let res = AuthMach::from_str(&args.unwrap_or_default());
     if res.is_err() {
         return Err(CoreError::Response(Response::new(
@@ -549,7 +548,7 @@ async fn handle_mail_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> std::result::Result<(), CoreError> {
+) -> Result<(), CoreError> {
     if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
@@ -605,7 +604,7 @@ async fn handle_mail_cmd<'a>(
 async fn handle_rcpt_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
-) -> std::result::Result<String, CoreError> {
+) -> Result<String, CoreError> {
     if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
@@ -645,7 +644,7 @@ async fn handle_rcpt_cmd<'a>(
 async fn handle_data_cmd<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> std::result::Result<Vec<u8>, CoreError> {
+) -> Result<Vec<u8>, CoreError> {
     if session.smtp_config.require_tls && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",

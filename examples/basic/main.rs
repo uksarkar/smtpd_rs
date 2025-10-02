@@ -1,7 +1,7 @@
 use smtpd_rs::AuthMach;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), std::io::Error> {
     let config = smtpd_rs::SmtpConfig {
         bind_addr: "127.0.0.1:2525".to_string(),
         require_auth: true,
