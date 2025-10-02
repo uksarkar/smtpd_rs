@@ -169,7 +169,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             // safe to unwrap, because the Ok() is guaranteed the data having some value
                             let auth_data = session.auth_data.as_ref().unwrap();
 
-                            let resp = match handler.on_auth(&session, auth_data) {
+                            let resp = match handler.handle_auth(&session, auth_data) {
                                 Ok(res) => {
                                     session.authenticated = true;
 
@@ -234,7 +234,30 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             .await?;
                     }
                     "MAIL" => handle_mail_cmd(args, &mut session, &mut controller).await?,
-                    "RCPT" => handle_rcpt_cmd(args, &mut session, &mut controller).await?,
+                    "RCPT" => {
+                        if let Ok(to) = handle_rcpt_cmd(args, &mut session, &mut controller).await {
+                            let res = match handler.handle_rcpt(&session, &to) {
+                                Ok(res) => {
+                                    session.to.push(to);
+
+                                    if res.is_default() {
+                                        Response::Raw("250 2.1.5 Ok".into())
+                                    } else {
+                                        res
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("{}", e);
+                                    Response::Raw(
+                                        "550 5.1.0 Requested action not taken: mailbox unavailable"
+                                            .into(),
+                                    )
+                                }
+                            };
+
+                            controller.write_response(&res).await?;
+                        }
+                    }
                     _ => {
                         controller
                             .write_response(&Response::syntax_error("Unrecognizable command"))
@@ -528,19 +551,19 @@ async fn handle_rcpt_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<()> {
+) -> Result<String> {
     if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
         controller
             .write_response(&Response::reject("Must issue a STARTTLS command first"))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     if session.smtp_config.require_auth && !session.authenticated {
         controller
             .write_response(&Response::reject("Authentication required"))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     if session.from.len() == 0 {
@@ -549,7 +572,7 @@ async fn handle_rcpt_cmd<'a>(
                 "Bad sequence of commands (MAIL required before RCPT)",
             ))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     if session.smtp_config.max_recipients < session.to.len() {
@@ -560,7 +583,7 @@ async fn handle_rcpt_cmd<'a>(
                 Some("4.5.3".into()),
             ))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default());
@@ -570,13 +593,11 @@ async fn handle_rcpt_cmd<'a>(
                 "Syntax error in parameters or arguments (invalid TO parameter)",
             ))
             .await?;
-        return Ok(());
+
+        return Err(Error::Internal.into());
     }
 
-    session.to.push(to.unwrap().to_string());
-    controller.write_response(&Response::ok("Ok")).await?;
-
-    Ok(())
+    Ok(to.unwrap().to_string())
 }
 
 async fn handle_data_cmd<'a>(

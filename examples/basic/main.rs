@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
 struct MyHandler {}
 
 impl smtpd_rs::SmtpHandler for MyHandler {
-    fn on_auth(
+    fn handle_auth(
         &mut self,
         _session: &smtpd_rs::Session,
         data: &smtpd_rs::AuthData,
@@ -35,7 +35,7 @@ impl smtpd_rs::SmtpHandler for MyHandler {
     }
 }
 
-struct MyHandlerFactory {}
+struct MyHandlerFactory;
 
 impl smtpd_rs::SmtpHandlerFactory for MyHandlerFactory {
     type Handler = MyHandler;

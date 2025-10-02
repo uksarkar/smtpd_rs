@@ -7,7 +7,8 @@ pub enum Error {
     MaxSizeExceeded { limit: usize, got: usize },
     UnrecognizedAuthMach(String),
     InvalidTLSConfiguration,
-    InvalidData
+    InvalidData,
+    Internal
 }
 
 impl From<std::io::Error> for Error {
