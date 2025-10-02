@@ -188,7 +188,27 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             controller.write_response(&resp).await?;
                         }
                     }
-                    "DATA" => handle_data_cmd(&mut session, &mut controller).await?,
+                    "DATA" => {
+                        let data = handle_data_cmd(&mut session, &mut controller).await?;
+                        let res = match handler.handle_email(&session, data) {
+                            Ok(r) => {
+                                if r.is_default() {
+                                    Response::ok("Ok: queued")
+                                } else {
+                                    r
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("{e}");
+                                Response::Raw(
+                                    "451 4.3.0 Requested action aborted: local error in processing"
+                                        .into(),
+                                )
+                            }
+                        };
+
+                        controller.write_response(&res).await?;
+                    }
                     "XCLIENT" => {
                         session.x_client = args.unwrap_or_default().to_string();
 
@@ -366,7 +386,7 @@ async fn handle_auth_cmd<'a>(
     let (mach, line) = res.unwrap();
 
     let mut line = line.unwrap_or_default().to_string();
-    let mut data: Option<AuthData> = None;
+    let data: Option<AuthData>;
 
     match mach {
         AuthMach::Plain => {
@@ -492,7 +512,7 @@ async fn handle_mail_cmd<'a>(
         controller
             .write_response(&Response::reject("Must issue a STARTTLS command first"))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     if session.smtp_config.require_auth && !session.authenticated {
@@ -603,19 +623,19 @@ async fn handle_rcpt_cmd<'a>(
 async fn handle_data_cmd<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     if session.smtp_config.require_tls && !session.tls {
         controller
             .write_response(&Response::reject("Must issue a STARTTLS command first"))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     if session.smtp_config.require_auth && !session.authenticated {
         controller
             .write_response(&Response::reject("Authentication required"))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     if session.from.len() == 0 || session.to.len() == 0 {
@@ -624,25 +644,16 @@ async fn handle_data_cmd<'a>(
                 "Bad sequence of commands (MAIL & RCPT required before DATA)",
             ))
             .await?;
-        return Ok(());
+        return Err(Error::Internal.into());
     }
 
     controller
         .write_line("354 Start mail input; end with <CR><LF>.<CR><LF>")
         .await?;
 
-    // TODO: handle max message size limit error
     let data = controller
         .read_mail_data(session.smtp_config.max_message_size)
         .await?;
 
-    // TODO: handle data
-    let data_str = String::from_utf8_lossy(&data);
-    println!("{}", data_str);
-
-    controller
-        .write_response(&Response::ok("Ok: queued"))
-        .await?;
-
-    Ok(())
+    Ok(data)
 }
