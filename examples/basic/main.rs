@@ -33,6 +33,18 @@ impl smtpd_rs::SmtpHandler for MyHandler {
 
         Err(smtpd_rs::Error::InvalidData)
     }
+
+    fn handle_rcpt(
+        &mut self,
+        _session: &smtpd_rs::Session,
+        to: &str,
+    ) -> Result<smtpd_rs::Response, smtpd_rs::Error> {
+        if to.ends_with("gmail.com") {
+            return Ok(smtpd_rs::Response::Default);
+        }
+
+        Err(smtpd_rs::Error::InvalidData)
+    }
 }
 
 struct MyHandlerFactory;
@@ -40,7 +52,7 @@ struct MyHandlerFactory;
 impl smtpd_rs::SmtpHandlerFactory for MyHandlerFactory {
     type Handler = MyHandler;
 
-    fn new_handler(&self, session: &smtpd_rs::Session) -> Self::Handler {
+    fn new_handler(&self, _session: &smtpd_rs::Session) -> Self::Handler {
         MyHandler {}
     }
 }
