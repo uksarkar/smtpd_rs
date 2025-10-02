@@ -13,6 +13,7 @@ pub use crate::core::SmtpConfig;
 pub use crate::core::auth::{AuthData, AuthMach};
 pub use crate::core::response::Response;
 pub use crate::core::session::Session;
+use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
 
 mod constants;
@@ -72,54 +73,12 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 
                 match command.as_str() {
                     "STARTTLS" => {
-                        if args.is_some_and(|a| a.len() > 0) {
-                            controller
-                                .write_response(&Response::syntax_error(
-                                    "Syntax error (no parameters allowed)",
-                                ))
-                                .await?;
-                            continue;
-                        }
+                        let (new_ctrl, res) =
+                            handle_start_tls_cmd(args, &mut session, controller).await;
+                        controller = new_ctrl;
 
-                        if session.tls {
-                            controller.write_line("503 Already in TLS mode").await?;
-                            continue;
-                        }
-
-                        match &session.smtp_config.tls_config {
-                            Some(tls_config) => {
-                                controller.write_line("220 Ready to start TLS").await?;
-
-                                let (new_ctrl, res) = controller.upgrade_to_tls(&tls_config).await;
-                                controller = new_ctrl;
-
-                                match res {
-                                    Ok(_) => {
-                                        println!("TLS upgrade successful");
-                                        session.tls = true;
-
-                                        controller.write_response(&Response::ok("OK")).await?;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("TLS upgrade failed: {}", e);
-
-                                        controller
-                                            .write_response(&Response::new(
-                                                454,
-                                                "TLS negotiation failed",
-                                                None,
-                                            ))
-                                            .await?;
-
-                                        break;
-                                    }
-                                };
-                            }
-                            None => {
-                                controller
-                                    .write_response(&Response::new(502, "TLS not available", None))
-                                    .await?;
-                            }
+                        if let Ok(response) = res {
+                            controller.write_response(&response).await?;
                         }
                     }
                     "QUIT" => {
@@ -193,187 +152,12 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                         controller.write_response(&Response::ok("OK")).await?;
                     }
                     "AUTH" => {
-                        let res = AuthMach::from_str(&args.unwrap_or_default());
-                        if res.is_err() {
-                            controller
-                                .write_response(&Response::new(
-                                    504,
-                                    format!("Unrecognized authentication type"),
-                                    Some("5.5.4".into()),
-                                ))
-                                .await?;
-                            break;
-                        }
-
-                        let (mach, line) = res.unwrap();
-
-                        let mut line = line.unwrap_or_default().to_string();
-                        let mut data: Option<AuthData> = None;
-
-                        match mach {
-                            AuthMach::Plain => {
-                                if line.is_empty() {
-                                    controller
-                                        .write_response(&Response::new(334, " ", None))
-                                        .await?;
-
-                                    line.clear();
-                                    controller.read_line_trimmed(&mut line).await?;
-                                }
-
-                                let parsed_data = utils::parser::parse_b64_line(&line)?;
-
-                                let parts: Vec<&[u8]> = parsed_data.split(|&b| b == 0).collect();
-
-                                if parts.len() != 3 {
-                                    controller
-                                        .write_response(&Response::syntax_error(
-                                            "Syntax error (unable to parse)",
-                                        ))
-                                        .await?;
-                                    break;
-                                }
-
-                                data = Some(AuthData::Plain {
-                                    username: String::from_utf8_lossy(parts[1]).to_string(),
-                                    password: String::from_utf8_lossy(parts[2]).to_string(),
-                                });
-                            }
-                            AuthMach::Login => {
-                                if line.is_empty() {
-                                    let encoded = general_purpose::STANDARD.encode("Username:");
-                                    controller
-                                        .write_response(&Response::new(334, encoded, None))
-                                        .await?;
-
-                                    line.clear();
-                                    controller.read_line_trimmed(&mut line).await?;
-                                }
-
-                                let username = utils::parser::parse_b64_line(&line)?;
-
-                                let encoded = general_purpose::STANDARD.encode("Password:");
-                                controller
-                                    .write_response(&Response::new(334, encoded, None))
-                                    .await?;
-
-                                line.clear();
-                                controller.read_line_trimmed(&mut line).await?;
-
-                                let password = utils::parser::parse_b64_line(&line)?;
-
-                                data = Some(AuthData::Login {
-                                    username: String::from_utf8_lossy(&username).to_string(),
-                                    password: String::from_utf8_lossy(&password).to_string(),
-                                });
-                            }
-                            AuthMach::CramMD5 => {
-                                let shared = format!(
-                                    "<{}.{}@{}>",
-                                    std::process::id(),
-                                    SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_nanos(),
-                                    session.smtp_config.hostname
-                                );
-
-                                let encoded = general_purpose::STANDARD.encode(&shared);
-                                controller
-                                    .write_response(&Response::new(334, encoded, None))
-                                    .await?;
-
-                                line.clear();
-                                controller.read_line_trimmed(&mut line).await?;
-
-                                if line == "*" {
-                                    controller
-                                        .write_response(&Response::syntax_error(
-                                            "Authentication cancelled",
-                                        ))
-                                        .await?;
-                                    break;
-                                }
-
-                                let buf = utils::parser::parse_b64_line(&line)?;
-                                let fields: Vec<&[u8]> = buf.split(|&b| b == b' ').collect();
-
-                                if fields.len() < 2 {
-                                    controller
-                                        .write_response(&Response::syntax_error(
-                                            "Syntax error (unable to parse)",
-                                        ))
-                                        .await?;
-                                    break;
-                                }
-
-                                data = Some(AuthData::CramMD5 {
-                                    username: String::from_utf8_lossy(fields[0]).to_string(),
-                                    password: String::from_utf8_lossy(fields[1]).to_string(),
-                                    shared,
-                                });
-                            }
-                        };
-
-                        if data.is_none() {
-                            controller
-                                .write_response(&Response::new(
-                                    535,
-                                    "Authentication credentials invalid",
-                                    Some("5.7.8".into()),
-                                ))
-                                .await?;
-                            break;
-                        }
-
-                        session.auth_data = data;
+                        let res = handle_auth_cmd(args, &mut session, &mut controller).await?;
 
                         // TODO
-                        controller
-                            .write_response(&Response::not_implemented())
-                            .await?;
+                        controller.write_response(&res).await?;
                     }
-                    "DATA" => {
-                        if config.require_tls && !session.tls {
-                            controller
-                                .write_response(&Response::reject(
-                                    "Must issue a STARTTLS command first",
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        if config.require_auth && !session.authenticated {
-                            controller
-                                .write_response(&Response::reject("Authentication required"))
-                                .await?;
-                            continue;
-                        }
-
-                        if session.from.len() == 0 || session.to.len() == 0 {
-                            controller
-                                .write_response(&Response::bad_sequence(
-                                    "Bad sequence of commands (MAIL & RCPT required before DATA)",
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        controller
-                            .write_line("354 Start mail input; end with <CR><LF>.<CR><LF>")
-                            .await?;
-
-                        // TODO: handle max message size limit error
-                        let data = controller.read_mail_data(config.max_message_size).await?;
-
-                        // TODO: handle data
-                        let data_str = String::from_utf8_lossy(&data);
-                        println!("{}", data_str);
-
-                        controller
-                            .write_response(&Response::ok("Ok: queued"))
-                            .await?;
-                    }
+                    "DATA" => handle_data_cmd(&mut session, &mut controller).await?,
                     "XCLIENT" => {
                         session.x_client = args.unwrap_or_default().to_string();
 
@@ -418,112 +202,8 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
                             .write_response(&Response::not_implemented())
                             .await?;
                     }
-                    "MAIL" => {
-                        if config.require_tls && config.tls_config.is_some() && !session.tls {
-                            controller
-                                .write_response(&Response::reject(
-                                    "Must issue a STARTTLS command first",
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        if config.require_auth && !session.authenticated {
-                            controller
-                                .write_response(&Response::reject("Authentication required"))
-                                .await?;
-                            continue;
-                        }
-
-                        let res = crate::utils::parser::parse_mail_from(args.unwrap_or_default());
-                        if res.is_none() {
-                            controller
-                                .write_response(&Response::syntax_error(
-                                    "Syntax error in FROM parameter",
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        let (from, params) = res.unwrap();
-                        let has_params = params.is_some();
-
-                        let size = match params {
-                            Some(arg_str) => crate::utils::parser::parse_size(arg_str.as_str()),
-                            None => None,
-                        };
-
-                        if has_params && size.is_none() {
-                            controller
-                                .write_response(&Response::syntax_error("Invalid SIZE parameter"))
-                                .await?;
-                            continue;
-                        }
-
-                        if let Some(max_size) = config.max_message_size {
-                            if let Some(s) = size {
-                                if max_size < s {
-                                    controller
-                                        .write_response(&Response::new(
-                                            452,
-                                            "Max size limit exceeded",
-                                            Some("4.5.3".into()),
-                                        ))
-                                        .await?;
-                                    continue;
-                                }
-                            }
-                        }
-
-                        session.from = from.to_string();
-                        controller.write_response(&Response::ok("Ok")).await?;
-                    }
-                    "RCPT" => {
-                        if config.require_tls && config.tls_config.is_some() && !session.tls {
-                            controller
-                                .write_response(&Response::reject(
-                                    "Must issue a STARTTLS command first",
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        if config.require_auth && !session.authenticated {
-                            controller
-                                .write_response(&Response::reject("Authentication required"))
-                                .await?;
-                            continue;
-                        }
-
-                        if session.from.len() == 0 {
-                            controller
-                                .write_response(&Response::bad_sequence(
-                                    "Bad sequence of commands (MAIL required before RCPT)",
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        if config.max_recipients < session.to.len() {
-                            controller
-                                .write_response(&Response::new(
-                                    452,
-                                    "Max recipient limit exceeded",
-                                    Some("4.5.3".into()),
-                                ))
-                                .await?;
-                            continue;
-                        }
-
-                        let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default());
-                        if to.is_none() {
-                            controller.write_response(&Response::syntax_error("Syntax error in parameters or arguments (invalid TO parameter)")).await?;
-                            continue;
-                        }
-
-                        session.to.push(to.unwrap().to_string());
-                        controller.write_response(&Response::ok("Ok")).await?;
-                    }
+                    "MAIL" => handle_mail_cmd(args, &mut session, &mut controller).await?,
+                    "RCPT" => handle_rcpt_cmd(args, &mut session, &mut controller).await?,
                     _ => {
                         controller
                             .write_response(&Response::syntax_error("Unrecognizable command"))
@@ -550,4 +230,348 @@ async fn handle_client(stream: TcpStream, config: Arc<SmtpConfig>) -> Result<()>
 pub async fn start_server(config: SmtpConfig) -> Result<()> {
     let server = SmtpServer::new(config);
     server.listen_and_serve().await
+}
+
+// handle start tls server
+async fn handle_start_tls_cmd<'a>(
+    args: Option<&str>,
+    session: &mut Session<'a>,
+    controller: StreamController,
+) -> (StreamController, Result<Response>) {
+    // Make the controller mutable
+    let mut controller = controller;
+
+    // Reject if arguments are provided
+    if args.is_some_and(|s| !s.is_empty()) {
+        return (
+            controller,
+            Ok(Response::syntax_error(
+                "Syntax error (no parameters allowed)",
+            )),
+        );
+    }
+
+    // Reject if already in TLS
+    if session.tls {
+        return (
+            controller,
+            Ok(Response::bad_sequence("Already in TLS mode")),
+        );
+    }
+
+    // Check if TLS is configured
+    let Some(tls_config) = &session.smtp_config.tls_config else {
+        return (controller, Ok(Response::not_implemented()));
+    };
+
+    // Inform client we’re ready
+    if let Err(e) = controller.write_line("220 Ready to start TLS").await {
+        return (controller, Err(e.into()));
+    }
+
+    // Attempt TLS upgrade
+    let (new_ctrl, res) = controller.upgrade_to_tls(tls_config).await;
+
+    match res {
+        Ok(_) => {
+            println!("TLS upgrade successful");
+            session.tls = true;
+            (new_ctrl, Ok(Response::ok("OK")))
+        }
+        Err(e) => {
+            eprintln!("TLS upgrade failed: {e}");
+            (
+                new_ctrl,
+                Ok(Response::new(454, "TLS negotiation failed", None)),
+            )
+        }
+    }
+}
+
+async fn handle_auth_cmd<'a>(
+    args: Option<&str>,
+    session: &mut Session<'a>,
+    controller: &mut StreamController,
+) -> Result<Response> {
+    let res = AuthMach::from_str(&args.unwrap_or_default());
+    if res.is_err() {
+        return Ok(Response::new(
+            504,
+            format!("Unrecognized authentication type"),
+            Some("5.5.4".into()),
+        ));
+    }
+
+    let (mach, line) = res.unwrap();
+
+    let mut line = line.unwrap_or_default().to_string();
+    let mut data: Option<AuthData> = None;
+
+    match mach {
+        AuthMach::Plain => {
+            if line.is_empty() {
+                controller
+                    .write_response(&Response::new(334, " ", None))
+                    .await?;
+
+                line.clear();
+                controller.read_line_trimmed(&mut line).await?;
+            }
+
+            let parsed_data = utils::parser::parse_b64_line(&line)?;
+
+            let parts: Vec<&[u8]> = parsed_data.split(|&b| b == 0).collect();
+
+            if parts.len() != 3 {
+                return Ok(Response::syntax_error("Syntax error (unable to parse)"));
+            }
+
+            data = Some(AuthData::Plain {
+                username: String::from_utf8_lossy(parts[1]).to_string(),
+                password: String::from_utf8_lossy(parts[2]).to_string(),
+            });
+        }
+        AuthMach::Login => {
+            if line.is_empty() {
+                let encoded = general_purpose::STANDARD.encode("Username:");
+                controller
+                    .write_response(&Response::new(334, encoded, None))
+                    .await?;
+
+                line.clear();
+                controller.read_line_trimmed(&mut line).await?;
+            }
+
+            let username = utils::parser::parse_b64_line(&line)?;
+
+            let encoded = general_purpose::STANDARD.encode("Password:");
+            controller
+                .write_response(&Response::new(334, encoded, None))
+                .await?;
+
+            line.clear();
+            controller.read_line_trimmed(&mut line).await?;
+
+            let password = utils::parser::parse_b64_line(&line)?;
+
+            data = Some(AuthData::Login {
+                username: String::from_utf8_lossy(&username).to_string(),
+                password: String::from_utf8_lossy(&password).to_string(),
+            });
+        }
+        AuthMach::CramMD5 => {
+            let shared = format!(
+                "<{}.{}@{}>",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                session.smtp_config.hostname
+            );
+
+            let encoded = general_purpose::STANDARD.encode(&shared);
+            controller
+                .write_response(&Response::new(334, encoded, None))
+                .await?;
+
+            line.clear();
+            controller.read_line_trimmed(&mut line).await?;
+
+            if line == "*" {
+                return Ok(Response::syntax_error("Authentication cancelled"));
+            }
+
+            let buf = utils::parser::parse_b64_line(&line)?;
+            let fields: Vec<&[u8]> = buf.split(|&b| b == b' ').collect();
+
+            if fields.len() < 2 {
+                return Ok(Response::syntax_error("Syntax error (unable to parse)"));
+            }
+
+            data = Some(AuthData::CramMD5 {
+                username: String::from_utf8_lossy(fields[0]).to_string(),
+                password: String::from_utf8_lossy(fields[1]).to_string(),
+                shared,
+            });
+        }
+    };
+
+    if data.is_none() {
+        return Ok(Response::new(
+            535,
+            "Authentication credentials invalid",
+            Some("5.7.8".into()),
+        ));
+    }
+
+    session.auth_data = data;
+
+    Ok(Response::not_implemented())
+}
+
+async fn handle_mail_cmd<'a>(
+    args: Option<&str>,
+    session: &mut Session<'a>,
+    controller: &mut StreamController,
+) -> Result<()> {
+    if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
+        controller
+            .write_response(&Response::reject("Must issue a STARTTLS command first"))
+            .await?;
+        return Ok(());
+    }
+
+    if session.smtp_config.require_auth && !session.authenticated {
+        controller
+            .write_response(&Response::reject("Authentication required"))
+            .await?;
+        return Ok(());
+    }
+
+    let res = crate::utils::parser::parse_mail_from(args.unwrap_or_default());
+    if res.is_none() {
+        controller
+            .write_response(&Response::syntax_error("Syntax error in FROM parameter"))
+            .await?;
+        return Ok(());
+    }
+
+    let (from, params) = res.unwrap();
+    let has_params = params.is_some();
+
+    let size = match params {
+        Some(arg_str) => crate::utils::parser::parse_size(arg_str.as_str()),
+        None => None,
+    };
+
+    if has_params && size.is_none() {
+        controller
+            .write_response(&Response::syntax_error("Invalid SIZE parameter"))
+            .await?;
+
+        return Ok(());
+    }
+
+    if let Some(max_size) = session.smtp_config.max_message_size {
+        if let Some(s) = size {
+            if max_size < s {
+                controller
+                    .write_response(&Response::new(
+                        452,
+                        "Max size limit exceeded",
+                        Some("4.5.3".into()),
+                    ))
+                    .await?;
+
+                return Ok(());
+            }
+        }
+    }
+
+    session.from = from.to_string();
+    controller.write_response(&Response::ok("Ok")).await?;
+    Ok(())
+}
+
+async fn handle_rcpt_cmd<'a>(
+    args: Option<&str>,
+    session: &mut Session<'a>,
+    controller: &mut StreamController,
+) -> Result<()> {
+    if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
+        controller
+            .write_response(&Response::reject("Must issue a STARTTLS command first"))
+            .await?;
+        return Ok(());
+    }
+
+    if session.smtp_config.require_auth && !session.authenticated {
+        controller
+            .write_response(&Response::reject("Authentication required"))
+            .await?;
+        return Ok(());
+    }
+
+    if session.from.len() == 0 {
+        controller
+            .write_response(&Response::bad_sequence(
+                "Bad sequence of commands (MAIL required before RCPT)",
+            ))
+            .await?;
+        return Ok(());
+    }
+
+    if session.smtp_config.max_recipients < session.to.len() {
+        controller
+            .write_response(&Response::new(
+                452,
+                "Max recipient limit exceeded",
+                Some("4.5.3".into()),
+            ))
+            .await?;
+        return Ok(());
+    }
+
+    let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default());
+    if to.is_none() {
+        controller
+            .write_response(&Response::syntax_error(
+                "Syntax error in parameters or arguments (invalid TO parameter)",
+            ))
+            .await?;
+        return Ok(());
+    }
+
+    session.to.push(to.unwrap().to_string());
+    controller.write_response(&Response::ok("Ok")).await?;
+
+    Ok(())
+}
+
+async fn handle_data_cmd<'a>(
+    session: &mut Session<'a>,
+    controller: &mut StreamController,
+) -> Result<()> {
+    if session.smtp_config.require_tls && !session.tls {
+        controller
+            .write_response(&Response::reject("Must issue a STARTTLS command first"))
+            .await?;
+        return Ok(());
+    }
+
+    if session.smtp_config.require_auth && !session.authenticated {
+        controller
+            .write_response(&Response::reject("Authentication required"))
+            .await?;
+        return Ok(());
+    }
+
+    if session.from.len() == 0 || session.to.len() == 0 {
+        controller
+            .write_response(&Response::bad_sequence(
+                "Bad sequence of commands (MAIL & RCPT required before DATA)",
+            ))
+            .await?;
+        return Ok(());
+    }
+
+    controller
+        .write_line("354 Start mail input; end with <CR><LF>.<CR><LF>")
+        .await?;
+
+    // TODO: handle max message size limit error
+    let data = controller
+        .read_mail_data(session.smtp_config.max_message_size)
+        .await?;
+
+    // TODO: handle data
+    let data_str = String::from_utf8_lossy(&data);
+    println!("{}", data_str);
+
+    controller
+        .write_response(&Response::ok("Ok: queued"))
+        .await?;
+
+    Ok(())
 }
