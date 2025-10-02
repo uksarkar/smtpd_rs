@@ -13,6 +13,7 @@ pub mod response;
 pub mod session;
 pub mod stream;
 pub mod tls;
+pub mod handler;
 
 // SMTP Server Configuration
 #[derive(Debug, Clone)]
@@ -118,16 +119,6 @@ impl AsyncWrite for ConnectionStream {
 impl Unpin for ConnectionStream {}
 
 impl ConnectionStream {
-    pub fn is_tls(&self) -> bool {
-        match self {
-            Self::Tcp(_) => false,
-            #[cfg(feature = "native-tls-backend")]
-            Self::NativeTls(_) => true,
-            #[cfg(feature = "rustls-backend")]
-            Self::Rustls(_) => true,
-        }
-    }
-
     // TLS upgrade functions
     pub async fn upgrade_to_tls(self, tls_config: &TlsConfig) -> (Self, Result<(), Error>) {
         match self {
@@ -163,6 +154,7 @@ impl ConnectionStream {
 
                 _ => (Self::Tcp(tcp_stream), Err(Error::InvalidTLSConfiguration)),
             },
+            _ => (self, Ok(())),
         }
     }
 }
