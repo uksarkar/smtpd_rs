@@ -358,7 +358,7 @@ async fn handle_start_tls_cmd<'a>(
 
     // Inform client we’re ready
     if let Err(e) = controller.write_line("220 Ready to start TLS").await {
-        return (controller, Err(e.into()));
+        return (controller, Err(e));
     }
 
     // Attempt TLS upgrade
@@ -389,7 +389,7 @@ async fn handle_auth_cmd<'a>(
     if res.is_err() {
         return Err(CoreError::Response(Response::new(
             504,
-            format!("Unrecognized authentication type"),
+            "Unrecognized authentication type",
             Some("5.5.4".into()),
         )));
     }
