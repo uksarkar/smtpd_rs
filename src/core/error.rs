@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use tokio::time::error::Elapsed;
+
 use crate::Response;
 
 #[derive(Debug)]
@@ -11,6 +13,29 @@ pub enum Error {
     InvalidTLSConfiguration,
     Response(Response),
     DecodeErr(base64::DecodeError),
+    Timeout,
+}
+
+impl TryInto<Response> for Error {
+    type Error = Error;
+
+    fn try_into(self) -> Result<Response, Self::Error> {
+        match self {
+            Self::InvalidLineEnding => Ok(Response::syntax_error("Invalid line ending")),
+            Self::DecodeErr(e) => Ok(Response::syntax_error(format!(
+                "Invalid base64 encoding: {e}"
+            ))),
+            Self::MaxSizeExceeded { limit, got: _ } => Ok(Response::reject(format!(
+                "Message size limit {limit} exceeded."
+            ))),
+            Self::Response(res) => Ok(res),
+            Self::Timeout => Ok(Response::Raw(
+                "421 4.4.2 ESMTP Service closing transmission channel after timeout exceeded"
+                    .into(),
+            )),
+            _ => Err(self),
+        }
+    }
 }
 
 impl From<std::io::Error> for Error {
@@ -22,6 +47,12 @@ impl From<std::io::Error> for Error {
 impl From<base64::DecodeError> for Error {
     fn from(value: base64::DecodeError) -> Self {
         Self::DecodeErr(value)
+    }
+}
+
+impl From<Elapsed> for Error {
+    fn from(_: Elapsed) -> Self {
+        Error::Timeout
     }
 }
 

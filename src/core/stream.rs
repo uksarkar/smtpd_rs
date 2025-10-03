@@ -1,6 +1,9 @@
 use std::fmt;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf},
+    time::timeout,
+};
 
 use crate::{
     TlsConfig,
@@ -11,14 +14,16 @@ use crate::{
 pub struct StreamController {
     pub reader: BufReader<ReadHalf<ConnectionStream>>,
     pub writer: BufWriter<WriteHalf<ConnectionStream>>,
+    timeout: core::time::Duration,
 }
 
 impl StreamController {
-    pub fn new(stream: ConnectionStream) -> Self {
+    pub fn new(stream: ConnectionStream, timeout: core::time::Duration) -> Self {
         let (read_half, write_half) = tokio::io::split(stream);
         Self {
             reader: BufReader::new(read_half),
             writer: BufWriter::new(write_half),
+            timeout,
         }
     }
 
@@ -26,13 +31,17 @@ impl StreamController {
         let stream = self.reader.into_inner().unsplit(self.writer.into_inner());
         let (stream, res) = stream.upgrade_to_tls(config).await;
 
-        (Self::new(stream), res)
+        (Self::new(stream, self.timeout), res)
     }
 
     pub async fn write_line(&mut self, line: impl AsRef<str>) -> Result<(), Error> {
-        self.writer.write_all(line.as_ref().as_bytes()).await?;
-        self.writer.write_all(b"\r\n").await?;
-        self.writer.flush().await?;
+        timeout(
+            self.timeout,
+            self.writer.write_all(line.as_ref().as_bytes()),
+        )
+        .await??;
+        timeout(self.timeout, self.writer.write_all(b"\r\n")).await??;
+        timeout(self.timeout, self.writer.flush()).await??;
         Ok(())
     }
 
@@ -41,27 +50,23 @@ impl StreamController {
     }
 
     pub async fn read_line_trimmed(&mut self, dist: &mut String) -> Result<(), Error> {
-        dist.clear();
-        self.reader.read_line(dist).await?;
+        timeout(self.timeout, self.reader.read_line(dist)).await??;
 
-        let start_trimmed = dist.trim_start();
-        let start_len_diff = dist.len() - start_trimmed.len();
+        let start_len_diff = dist.len() - dist.trim_start().len();
         if start_len_diff > 0 {
             dist.drain(0..start_len_diff);
         }
 
-        let end_trimmed = dist.trim_end();
-        let end_len_diff = dist.len() - end_trimmed.len();
-        if end_len_diff > 0 {
-            dist.truncate(end_trimmed.len());
+        let end_trimmed = dist.trim_end().len();
+        if end_trimmed < dist.len() {
+            dist.truncate(end_trimmed);
         }
 
         Ok(())
     }
 
     pub async fn read_line_crlf(&mut self, buffer: &mut Vec<u8>) -> Result<(), Error> {
-        buffer.clear();
-        self.reader.read_until(b'\n', buffer).await?;
+        timeout(self.timeout, self.reader.read_until(b'\n', buffer)).await??;
 
         if buffer.ends_with(b"\r\n") {
             Ok(())

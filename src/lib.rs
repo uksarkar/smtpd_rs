@@ -5,7 +5,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::timeout;
 
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
@@ -64,7 +63,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     config: Arc<SmtpConfig>,
     handler_factory: Arc<T>,
 ) -> Result<(), CoreError> {
-    let mut controller = StreamController::new(ConnectionStream::Tcp(stream));
+    let mut controller = StreamController::new(ConnectionStream::Tcp(stream), config.timeout);
     let mut session = Session::new(&config);
     let mut handler = handler_factory.new_handler(&session);
 
@@ -80,8 +79,8 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
         buffer.clear();
 
         // Read command with timeout
-        match timeout(config.timeout, controller.read_line_trimmed(&mut buffer)).await {
-            Ok(Ok(())) => {
+        match controller.read_line_trimmed(&mut buffer).await {
+            Ok(()) => {
                 let (command, args) = utils::parser::parse_cmd(&buffer.trim());
 
                 match command.as_str() {
@@ -180,54 +179,39 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                             res
                                         }
                                     }
-                                    Err(e) => {
-                                        eprintln!("{}", e);
-                                        Response::reject("Authentication unsuccessful.")
-                                    }
+                                    Err(e) => match e {
+                                        Error::Response(res) if !res.is_default() => res,
+                                        _ => Response::reject("Authentication unsuccessful."),
+                                    },
                                 };
 
                                 controller.write_response(&resp).await?;
                             }
-                            Err(err) => match err {
-                                CoreError::Response(res) => {
-                                    if !res.is_default() {
-                                        controller.write_response(&res).await?;
-                                    }
-                                }
-                                _ => return Err(err),
-                            },
+                            Err(err) => {
+                                let res: Response = err.try_into()?;
+                                controller.write_response(&res).await?;
+                            }
                         };
                     }
                     "DATA" => {
                         match handle_data_cmd(&mut session, &mut controller).await {
                             Ok(data) => {
                                 let res = match handler.handle_email(&session, data) {
-                                    Ok(r) => {
-                                        if r.is_default() {
-                                            Response::ok("Ok: queued")
-                                        } else {
-                                            r
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("{e}");
-                                        Response::Raw(
-                                    "451 4.3.0 Requested action aborted: local error in processing"
-                                        .into(),
-                                )
+                                    Ok(r) if !r.is_default() => r,
+                                    Ok(_) => Response::ok("Ok: queued"),
+                                    Err(e) => match e {
+                                        Error::Response(res) if !res.is_default() => res,
+                                        _ => Response::Raw("451 4.3.0 Requested action aborted: local error in processing"
+                                        .into())
                                     }
                                 };
 
                                 controller.write_response(&res).await?;
                             }
-                            Err(err) => match err {
-                                CoreError::Response(res) => {
-                                    if !res.is_default() {
-                                        controller.write_response(&res).await?;
-                                    }
-                                }
-                                _ => return Err(err),
-                            },
+                            Err(err) => {
+                                let res: Response = err.try_into()?;
+                                controller.write_response(&res).await?;
+                            }
                         };
                     }
                     "XCLIENT" => {
@@ -277,14 +261,8 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     "MAIL" => {
                         if let Err(err) = handle_mail_cmd(args, &mut session, &mut controller).await
                         {
-                            match err {
-                                CoreError::Response(res) => {
-                                    if !res.is_default() {
-                                        controller.write_response(&res).await?;
-                                    }
-                                }
-                                _ => return Err(err),
-                            }
+                            let res: Response = err.try_into()?;
+                            controller.write_response(&res).await?;
                         }
                     }
                     "RCPT" => {
@@ -301,11 +279,11 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                         }
                                     }
                                     Err(e) => {
-                                        eprintln!("{}", e);
-                                        Response::Raw(
-                                        "550 5.1.0 Requested action not taken: mailbox unavailable"
-                                            .into(),
-                                    )
+                                        match e {
+                                            Error::Response(res) if !res.is_default() => res,
+                                            _ => Response::Raw("550 5.1.0 Requested action not taken: mailbox unavailable"
+                                            .into()),
+                                        }
                                     }
                                 };
 
@@ -313,14 +291,8 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             }
 
                             Err(err) => {
-                                match err {
-                                    CoreError::Response(res) => {
-                                        if !res.is_default() {
-                                            controller.write_response(&res).await?;
-                                        }
-                                    }
-                                    _ => return Err(err),
-                                };
+                                let res: Response = err.try_into()?;
+                                controller.write_response(&res).await?;
                             }
                         };
                     }
@@ -331,13 +303,10 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     }
                 }
             }
-            Ok(Err(e)) => {
-                eprintln!("Read error: {}", e);
-                break;
-            }
-            Err(_) => {
-                eprintln!("Timeout waiting for command");
-                controller.write_line("421 Timeout").await?;
+            Err(e) => {
+                eprintln!("Error: {e}");
+                let res: Response = e.try_into()?;
+                controller.write_response(&res).await?;
                 break;
             }
         }
