@@ -5,7 +5,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use trust_dns_resolver::TokioAsyncResolver;
 use trust_dns_resolver::system_conf::read_system_conf;
 
@@ -19,6 +19,7 @@ pub use crate::core::response_error::Error;
 pub use crate::core::session::Session;
 use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
+use crate::core::tls::TlsMode;
 
 mod constants;
 mod core;
@@ -38,14 +39,25 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
         }
     }
 
+    /// Entry point: dispatch based on TLS mode
     pub async fn listen_and_serve(self) -> Result<(), std::io::Error> {
+        match &self.config.tls_mode {
+            TlsMode::Disabled => self.serve_plain().await,
+            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+            TlsMode::Direct(_) => self.serve_direct().await,
+            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+            TlsMode::Opportunistic(_) | TlsMode::Required(_) => self.serve_plain().await,
+        }
+    }
+
+    /// Plain TCP listener (STARTTLS optional handling done per session)
+    async fn serve_plain(self) -> Result<(), std::io::Error> {
         let listener = TcpListener::bind(&self.config.bind_addr).await?;
         println!("SMTP server listening on {}", self.config.bind_addr);
 
         let config = Arc::new(self.config);
         let handler = Arc::clone(&self.handler);
 
-        // build resolver from /etc/resolv.conf (Unix) or system settings
         let (resolver_config, opts) = read_system_conf().unwrap();
         let resolver = Arc::new(TokioAsyncResolver::tokio(resolver_config, opts));
 
@@ -57,9 +69,66 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
             let handler = Arc::clone(&handler);
             let resolver = Arc::clone(&resolver);
 
+            let controller = StreamController::new(ConnectionStream::Tcp(stream), config.timeout);
+
             tokio::spawn(async move {
-                if let Err(e) = handle_client(stream, peer_addr, config, handler, resolver).await {
+                if let Err(e) =
+                    handle_client(controller, peer_addr, config, handler, resolver).await
+                {
                     eprintln!("Error handling client {}: {}", peer_addr, e);
+                }
+            });
+        }
+    }
+
+    /// Fully TLS listener (implicit TLS) — feature-gated
+    #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+    async fn serve_direct(self) -> Result<(), std::io::Error> {
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+
+        let config = Arc::new(self.config);
+
+        let tls_config = {
+            let mode = &config.tls_mode;
+            mode.config().expect("Direct TLS must have a TLS config")
+        };
+
+        // Bind TCP listener
+        let listener = TcpListener::bind(&config.bind_addr).await?;
+        println!("SMTP TLS server listening on {}", config.bind_addr);
+
+        let handler = Arc::clone(&self.handler);
+
+        let (resolver_config, opts) = read_system_conf().unwrap();
+        let resolver = Arc::new(TokioAsyncResolver::tokio(resolver_config, opts));
+
+        loop {
+            let (tcp_stream, peer_addr) = listener.accept().await?;
+            println!("New TLS connection from {}", peer_addr);
+
+            let config = Arc::clone(&config);
+            let handler = Arc::clone(&handler);
+            let resolver = Arc::clone(&resolver);
+            let tls_config = tls_config.clone();
+
+            tokio::spawn(async move {
+                // Upgrade TCP to TLS based on feature
+                match ConnectionStream::Tcp(tcp_stream)
+                    .upgrade_to_tls(&tls_config)
+                    .await
+                {
+                    Ok(controller_stream) => {
+                        let controller = StreamController::new(controller_stream, config.timeout);
+                        if let Err(e) =
+                            handle_client(controller, peer_addr, config, handler, resolver).await
+                        {
+                            eprintln!("Error handling TLS client {}: {}", peer_addr, e);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("TLS handshake failed for {}: {:?}", peer_addr, err);
+                    }
                 }
             });
         }
@@ -67,17 +136,16 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
 }
 
 async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
-    stream: TcpStream,
+    mut controller: StreamController,
     addr: SocketAddr,
     config: Arc<SmtpConfig>,
     handler_factory: Arc<T>,
     resolver: Arc<TokioAsyncResolver>,
 ) -> Result<(), CoreError> {
-    let mut controller = StreamController::new(ConnectionStream::Tcp(stream), config.timeout);
     let (remote_ip, remote_host) =
         get_remote_info(&addr, config.disable_reverse_dns, &resolver).await;
 
-    let mut session = Session::new(&config, remote_ip, remote_host);
+    let mut session = Session::new(&config, remote_ip, remote_host, controller.is_tls);
     let mut handler = handler_factory.new_handler(&session);
 
     // Send greeting
@@ -98,13 +166,24 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
 
                 match command.as_str() {
                     "STARTTLS" => {
-                        let (new_ctrl, res) =
-                            handle_start_tls_cmd(args, &mut session, controller).await;
-                        controller = new_ctrl;
+                        match handle_start_tls_cmd(args, &controller, &session) {
+                            Ok(tls_config) => {
+                                // Inform client we’re ready
+                                controller.write_line("220 Ready to start TLS").await?;
 
-                        if let Ok(response) = res {
-                            controller.write_response(&response).await?;
-                        }
+                                // Attempt TLS upgrade
+                                let new_ctrl = controller.upgrade_to_tls(tls_config).await?;
+                                controller = new_ctrl;
+
+                                controller.write_response(&Response::ok("Ok")).await?;
+                            }
+                            Err(e) => {
+                                let res: Response = e.try_into()?;
+                                if !res.is_default() {
+                                    controller.write_response(&res).await?;
+                                }
+                            }
+                        };
                     }
                     "QUIT" => {
                         controller
@@ -147,7 +226,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         .unwrap();
 
                         // STARTTLS if enabled
-                        if session.smtp_config.tls_config.is_some() {
+                        if session.smtp_config.tls_mode.has_tls() {
                             writeln!(message, "250-STARTTLS").unwrap();
                         }
 
@@ -348,58 +427,29 @@ pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
 }
 
 // handle start tls server
-async fn handle_start_tls_cmd<'a>(
+fn handle_start_tls_cmd<'a>(
     args: Option<&str>,
-    session: &mut Session<'a>,
-    controller: StreamController,
-) -> (StreamController, Result<Response, CoreError>) {
-    // Make the controller mutable
-    let mut controller = controller;
-
+    controller: &StreamController,
+    session: &Session<'a>,
+) -> Result<&'a TlsConfig, CoreError> {
     // Reject if arguments are provided
     if args.is_some_and(|s| !s.is_empty()) {
-        return (
-            controller,
-            Ok(Response::syntax_error(
-                "Syntax error (no parameters allowed)",
-            )),
-        );
+        return Err(CoreError::Response(Response::syntax_error(
+            "Syntax error (no parameters allowed)",
+        )));
     }
 
     // Reject if already in TLS
-    if session.tls {
-        return (
-            controller,
-            Ok(Response::bad_sequence("Already in TLS mode")),
-        );
+    if controller.is_tls {
+        return Err(CoreError::Response(Response::bad_sequence(
+            "Already in TLS mode",
+        )));
     }
 
     // Check if TLS is configured
-    let Some(tls_config) = &session.smtp_config.tls_config else {
-        return (controller, Ok(Response::not_implemented()));
-    };
-
-    // Inform client we’re ready
-    if let Err(e) = controller.write_line("220 Ready to start TLS").await {
-        return (controller, Err(e));
-    }
-
-    // Attempt TLS upgrade
-    let (new_ctrl, res) = controller.upgrade_to_tls(tls_config).await;
-
-    match res {
-        Ok(_) => {
-            println!("TLS upgrade successful");
-            session.tls = true;
-            (new_ctrl, Ok(Response::ok("OK")))
-        }
-        Err(e) => {
-            eprintln!("TLS upgrade failed: {e}");
-            (
-                new_ctrl,
-                Ok(Response::new(454, "TLS negotiation failed", None)),
-            )
-        }
+    match session.smtp_config.tls_mode.config() {
+        Some(cnf) => Ok(cnf),
+        None => Err(CoreError::Response(Response::not_implemented())),
     }
 }
 
@@ -541,7 +591,7 @@ async fn handle_mail_cmd<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> Result<(), CoreError> {
-    if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
+    if session.smtp_config.require_tls && session.smtp_config.tls_mode.has_tls() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
@@ -597,7 +647,7 @@ async fn handle_rcpt_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
 ) -> Result<String, CoreError> {
-    if session.smtp_config.require_tls && session.smtp_config.tls_config.is_some() && !session.tls {
+    if session.smtp_config.require_tls && session.smtp_config.tls_mode.has_tls() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));

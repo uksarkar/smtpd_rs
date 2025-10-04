@@ -14,24 +14,28 @@ use crate::{
 pub struct StreamController {
     pub reader: BufReader<ReadHalf<ConnectionStream>>,
     pub writer: BufWriter<WriteHalf<ConnectionStream>>,
+    pub is_tls: bool,
     timeout: core::time::Duration,
 }
 
 impl StreamController {
     pub fn new(stream: ConnectionStream, timeout: core::time::Duration) -> Self {
+        let is_tls = stream.is_tls();
+
         let (read_half, write_half) = tokio::io::split(stream);
         Self {
             reader: BufReader::new(read_half),
             writer: BufWriter::new(write_half),
+            is_tls,
             timeout,
         }
     }
 
-    pub async fn upgrade_to_tls(self, config: &TlsConfig) -> (Self, Result<(), Error>) {
+    pub async fn upgrade_to_tls(self, config: &TlsConfig) -> Result<Self, Error> {
         let stream = self.reader.into_inner().unsplit(self.writer.into_inner());
-        let (stream, res) = stream.upgrade_to_tls(config).await;
+        let stream = timeout(self.timeout, stream.upgrade_to_tls(config)).await??;
 
-        (Self::new(stream, self.timeout), res)
+        Ok(Self::new(stream, self.timeout))
     }
 
     pub async fn write_line(&mut self, line: impl AsRef<str>) -> Result<(), Error> {

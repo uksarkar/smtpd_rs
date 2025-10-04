@@ -21,7 +21,7 @@ pub struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
-    pub fn new(config: &'a SmtpConfig, remote_ip: String, remote_host: String) -> Self {
+    pub fn new(config: &'a SmtpConfig, remote_ip: String, remote_host: String, is_tls: bool) -> Self {
         let x_client_trust = config
             .x_client_allowed
             .as_ref()
@@ -29,7 +29,7 @@ impl<'a> Session<'a> {
 
         Self {
             authenticated: false,
-            tls: false,
+            tls: is_tls,
             from: String::with_capacity(256),
             remote_name: String::with_capacity(256),
             smtp_config: config,

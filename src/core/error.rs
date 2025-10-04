@@ -8,12 +8,17 @@ use crate::Response;
 pub enum Error {
     Io(std::io::Error),
     InvalidLineEnding,
-    MaxSizeExceeded { limit: usize, got: usize },
+    MaxSizeExceeded {
+        limit: usize,
+        got: usize,
+    },
     UnrecognizedAuthMach(String),
     InvalidTLSConfiguration,
     Response(Response),
     DecodeErr(base64::DecodeError),
     Timeout,
+    #[cfg(feature = "native-tls-backend")]
+    NativeTlsErr(native_tls::Error),
 }
 
 impl TryInto<Response> for Error {
@@ -53,6 +58,13 @@ impl From<base64::DecodeError> for Error {
 impl From<Elapsed> for Error {
     fn from(_: Elapsed) -> Self {
         Error::Timeout
+    }
+}
+
+#[cfg(feature = "native-tls-backend")]
+impl From<native_tls::Error> for Error {
+    fn from(e: native_tls::Error) -> Self {
+        Error::NativeTlsErr(e)
     }
 }
 

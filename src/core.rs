@@ -1,6 +1,6 @@
 use crate::core::auth::AuthMach;
 use crate::core::error::Error;
-use crate::core::tls::TlsConfig;
+use crate::core::tls::{TlsConfig, TlsMode};
 use std::pin::Pin;
 use std::task::Poll;
 use std::time::Duration;
@@ -21,7 +21,7 @@ pub mod tls;
 pub struct SmtpConfig {
     pub hostname: String,
     pub bind_addr: String,
-    pub tls_config: Option<TlsConfig>,
+    pub tls_mode: TlsMode,
     pub require_tls: bool,
     pub max_message_size: Option<usize>,
     pub max_recipients: usize,
@@ -41,7 +41,6 @@ impl Default for SmtpConfig {
         Self {
             bind_addr: "127.0.0.1:25".to_string(),
             hostname,
-            tls_config: None,
             max_message_size: Some(10 * 1024 * 1024), // 10MB
             timeout: Duration::from_secs(30),
             max_recipients: 100,
@@ -50,6 +49,7 @@ impl Default for SmtpConfig {
             require_auth: false,
             disable_reverse_dns: false,
             x_client_allowed: None,
+            tls_mode: TlsMode::Disabled,
         }
     }
 }
@@ -124,8 +124,20 @@ impl AsyncWrite for ConnectionStream {
 impl Unpin for ConnectionStream {}
 
 impl ConnectionStream {
+    pub fn is_tls(&self) -> bool {
+        match self {
+            #[cfg(feature = "native-tls-backend")]
+            Self::NativeTls(_) => true,
+            #[cfg(feature = "rustls-backend")]
+            Self::Rustls(_) => true,
+            Self::Tcp(_) => false,
+            #[cfg(not(any(feature = "native-tls-backend", feature = "rustls-backend")))]
+            _ => false,
+        }
+    }
+
     // TLS upgrade functions
-    pub async fn upgrade_to_tls(self, tls_config: &TlsConfig) -> (Self, Result<(), Error>) {
+    pub async fn upgrade_to_tls(self, tls_config: &TlsConfig) -> Result<Self, Error> {
         match self {
             Self::Tcp(tcp_stream) => match tls_config {
                 #[cfg(feature = "native-tls-backend")]
@@ -134,32 +146,23 @@ impl ConnectionStream {
 
                     let acceptor = native_tls::TlsAcceptor::builder(identity.clone()).build()?;
                     let acceptor = TlsAcceptor::from(acceptor);
-                    let tls_stream = acceptor.accept(tcp_stream).await?;
+                    let stream = acceptor.accept(tcp_stream).await?;
 
-                    (Self::NativeTls(tls_stream), Ok(()))
+                    Ok(Self::NativeTls(stream))
                 }
 
                 #[cfg(feature = "rustls-backend")]
-                TlsConfig::Rustls { certs, key } => {
+                TlsConfig::Rustls(config) => {
                     use std::sync::Arc;
-                    use tokio_rustls::{TlsAcceptor, rustls};
+                    use tokio_rustls::TlsAcceptor;
 
-                    let mut config = rustls::ServerConfig::builder()
-                        .with_safe_defaults()
-                        .with_no_client_auth()
-                        .with_single_cert(certs.clone(), key.clone())?;
+                    let acceptor = TlsAcceptor::from(Arc::new(config.clone()));
+                    let stream = acceptor.accept(tcp_stream).await?;
 
-                    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-                    let acceptor = TlsAcceptor::from(Arc::new(config));
-                    let tls_stream = acceptor.accept(tcp_stream).await?;
-
-                    (Self::Rustls(tls_stream), Ok(()))
+                    Ok(Self::Rustls(stream))
                 }
-
-                _ => (Self::Tcp(tcp_stream), Err(Error::InvalidTLSConfiguration)),
             },
-            _ => (self, Ok(())),
+            _ => Ok(self),
         }
     }
 }
