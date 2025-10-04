@@ -9,12 +9,12 @@ use tokio::net::TcpStream;
 
 pub mod auth;
 pub mod error;
-pub mod response_error;
+pub mod handler;
 pub mod response;
+pub mod response_error;
 pub mod session;
 pub mod stream;
 pub mod tls;
-pub mod handler;
 
 // SMTP Server Configuration
 #[derive(Debug, Clone)]
@@ -29,6 +29,7 @@ pub struct SmtpConfig {
     pub auth_machs: Vec<AuthMach>,
     pub require_auth: bool,
     pub disable_reverse_dns: bool,
+    pub x_client_allowed: Option<Vec<String>>,
 }
 
 impl Default for SmtpConfig {
@@ -48,6 +49,7 @@ impl Default for SmtpConfig {
             require_tls: false,
             require_auth: false,
             disable_reverse_dns: false,
+            x_client_allowed: None,
         }
     }
 }
