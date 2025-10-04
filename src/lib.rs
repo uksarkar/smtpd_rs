@@ -318,35 +318,37 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     "XCLIENT" => {
                         session.x_client = args.unwrap_or_default().to_string();
 
-                        for item in session.x_client.split_whitespace() {
-                            if let Some((k, v)) = item.trim().split_once("=") {
-                                if k.eq_ignore_ascii_case("ADDR")
-                                    && std::net::IpAddr::from_str(v).is_ok()
-                                {
-                                    session.x_client_addr.clear();
-                                    session.x_client_addr.push_str(v);
-                                }
+                        if session.x_client_trust {
+                            for item in session.x_client.split_whitespace() {
+                                if let Some((k, v)) = item.trim().split_once("=") {
+                                    if k.eq_ignore_ascii_case("ADDR")
+                                        && std::net::IpAddr::from_str(v).is_ok()
+                                    {
+                                        session.x_client_addr.clear();
+                                        session.x_client_addr.push_str(v);
+                                    }
 
-                                if k.eq_ignore_ascii_case("NAME")
-                                    && !v.is_empty()
-                                    && !v.eq_ignore_ascii_case("[UNAVAILABLE]")
-                                {
-                                    session.x_client_name.clear();
-                                    session.x_client_name.push_str(v);
+                                    if k.eq_ignore_ascii_case("NAME")
+                                        && !v.is_empty()
+                                        && !v.eq_ignore_ascii_case("[UNAVAILABLE]")
+                                    {
+                                        session.x_client_name.clear();
+                                        session.x_client_name.push_str(v);
+                                    }
                                 }
                             }
-                        }
 
-                        if session.x_client_addr.len() > 7 {
-                            session.remote_ip = session.x_client_addr.to_owned();
+                            if session.x_client_addr.len() > 7 {
+                                session.remote_ip = session.x_client_addr.to_owned();
 
-                            if session.x_client_name.len() > 4 {
-                                session.remote_host = session.x_client_name.to_owned();
-                            } else {
-                                if let Ok(ip) = IpAddr::from_str(&session.remote_ip) {
-                                    session.remote_host = get_remote_host(ip, &resolver).await;
+                                if session.x_client_name.len() > 4 {
+                                    session.remote_host = session.x_client_name.to_owned();
                                 } else {
-                                    session.remote_host = "unknown".to_string();
+                                    if let Ok(ip) = IpAddr::from_str(&session.remote_ip) {
+                                        session.remote_host = get_remote_host(ip, &resolver).await;
+                                    } else {
+                                        session.remote_host = "unknown".to_string();
+                                    }
                                 }
                             }
                         }
