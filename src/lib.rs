@@ -187,7 +187,9 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                 let new_ctrl = controller.upgrade_to_tls(tls_config).await?;
                                 controller = new_ctrl;
 
-                                controller.write_response(&Response::ok("Ok")).await?;
+                                // RFC 3207 specifies that the server must discard any prior knowledge obtained from the client.
+                                session.remote_name.clear();
+                                session.reset();
                             }
                             Err(e) => {
                                 let res: Response = e.try_into()?;
@@ -271,6 +273,12 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         controller.write_response(&Response::ok("OK")).await?;
                     }
                     "RSET" => {
+                        if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
+                            controller
+                                .write_line("530 5.7.0 Must issue a STARTTLS command first")
+                                .await?;
+                            break;
+                        }
                         session.reset();
                         controller.write_response(&Response::ok("OK")).await?;
                     }
