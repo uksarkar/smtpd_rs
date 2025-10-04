@@ -300,7 +300,9 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                     }
                                     Err(e) => match e {
                                         Error::Response(res) if !res.is_default() => res,
-                                        _ => Response::Raw("535 5.7.8 Authentication credentials invalid".into()),
+                                        _ => Response::Raw(
+                                            "535 5.7.8 Authentication credentials invalid".into(),
+                                        ),
                                     },
                                 };
 
@@ -417,8 +419,11 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         };
                     }
                     _ => {
+                        // See RFC 5321 section 4.2.4 for usage of 500 & 502 response codes.
                         controller
-                            .write_response(&Response::syntax_error("Unrecognizable command"))
+                            .write_response(&Response::Raw(
+                                "500 5.5.2 Syntax error, command unrecognized".into(),
+                            ))
                             .await?;
                     }
                 }
