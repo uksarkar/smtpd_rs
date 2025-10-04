@@ -589,7 +589,7 @@ async fn handle_mail_cmd<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> Result<(), CoreError> {
-    if session.smtp_config.require_tls && session.smtp_config.tls_mode.has_tls() && !session.tls {
+    if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
@@ -609,7 +609,7 @@ async fn handle_mail_cmd<'a>(
     }
 
     let (from, params) = res.unwrap();
-    let has_params = params.is_some();
+    let has_params = params.as_ref().is_some_and(|p| !p.is_empty());
 
     let size = match params {
         Some(arg_str) => crate::utils::parser::parse_size(arg_str.as_str()),
@@ -645,7 +645,7 @@ async fn handle_rcpt_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
 ) -> Result<String, CoreError> {
-    if session.smtp_config.require_tls && session.smtp_config.tls_mode.has_tls() && !session.tls {
+    if session.smtp_config.tls_mode.tls_mandatory() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
@@ -685,7 +685,7 @@ async fn handle_data_cmd<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> Result<Vec<u8>, CoreError> {
-    if session.smtp_config.require_tls && !session.tls {
+    if session.smtp_config.tls_mode.tls_mandatory() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));

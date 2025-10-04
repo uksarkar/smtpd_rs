@@ -20,13 +20,17 @@ pub mod tls;
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
     pub hostname: String,
+    // TCP address to listen on, defaults to ":25" (all addresses, port 25) if empty
     pub bind_addr: String,
     pub tls_mode: TlsMode,
-    pub require_tls: bool,
+    // Maximum message size allowed, in bytes
     pub max_message_size: Option<usize>,
+    // Maximum number of recipients, defaults to 100.
     pub max_recipients: usize,
     pub timeout: Duration,
+    // List of allowed authentication mechanisms. Currently supported: LOGIN, PLAIN, CRAM-MD5. Enabling LOGIN and PLAIN will reduce RFC 4954 compliance. Live empty for no authentication
     pub auth_machs: Vec<AuthMach>,
+    // Require authentication for every command except AUTH, EHLO, HELO, NOOP, RSET or QUIT as per RFC 4954.
     pub require_auth: bool,
     pub disable_reverse_dns: bool,
     pub x_client_allowed: Option<Vec<String>>,
@@ -45,7 +49,6 @@ impl Default for SmtpConfig {
             timeout: Duration::from_secs(30),
             max_recipients: 100,
             auth_machs: vec![],
-            require_tls: false,
             require_auth: false,
             disable_reverse_dns: false,
             x_client_allowed: None,

@@ -57,20 +57,29 @@ impl TlsMode {
     }
 
     /// Returns whether the server starts TLS immediately (Direct mode)
-    #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     pub fn is_direct_tls(&self) -> bool {
-        matches!(self, Self::Direct(_))
+        match self {
+            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+            Self::Direct(_) => true,
+            _ => false,
+        }
     }
 
     /// Returns whether the client may start TLS (Opportunistic or Required)
-    #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     pub fn allows_starttls(&self) -> bool {
-        matches!(self, Self::Opportunistic(_) | Self::Required(_))
+        match self {
+            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+            Self::Opportunistic(_) | Self::Required(_) => true,
+            _ => false,
+        }
     }
 
     /// Returns whether TLS is mandatory for commands (Required)
-    #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     pub fn tls_mandatory(&self) -> bool {
-        matches!(self, Self::Required(_))
+        match self {
+            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+            Self::Required(_) => true,
+            _ => false,
+        }
     }
 }
