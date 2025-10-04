@@ -199,7 +199,13 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     }
                     "QUIT" => {
                         controller
-                            .write_response(&Response::new(221, "Bye", None))
+                            .write_response(&Response::Raw(
+                                format!(
+                                    "221 2.0.0 {} {} ESMTP Service closing transmission channel",
+                                    session.smtp_config.hostname, session.smtp_config.appname
+                                )
+                                .into(),
+                            ))
                             .await?;
                         break;
                     }
