@@ -299,7 +299,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         };
                     }
                     "DATA" => {
-                        match handle_data_cmd(&mut session, &mut controller).await {
+                        match extract_mail_data(&mut session, &mut controller).await {
                             Ok(data) => {
                                 let res = match handler.handle_email(&session, data) {
                                     Ok(r) if !r.is_default() => r,
@@ -372,7 +372,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         }
                     }
                     "RCPT" => {
-                        match handle_rcpt_cmd(args, &mut session).await {
+                        match extract_rcpt_from_arg(args, &mut session).await {
                             Ok(to) => {
                                 let res = match handler.handle_rcpt(&session, &to) {
                                     Ok(res) => {
@@ -647,7 +647,7 @@ async fn handle_mail_cmd<'a>(
     Ok(())
 }
 
-async fn handle_rcpt_cmd<'a>(
+async fn extract_rcpt_from_arg<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
 ) -> Result<String, CoreError> {
@@ -669,7 +669,7 @@ async fn handle_rcpt_cmd<'a>(
         )));
     }
 
-    if session.smtp_config.max_recipients < session.to.len() {
+    if session.smtp_config.max_recipients == session.to.len() {
         return Err(CoreError::Response(Response::new(
             452,
             "Max recipient limit exceeded",
@@ -687,11 +687,11 @@ async fn handle_rcpt_cmd<'a>(
     Ok(to.unwrap().to_string())
 }
 
-async fn handle_data_cmd<'a>(
+async fn extract_mail_data<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> Result<Vec<u8>, CoreError> {
-    if session.smtp_config.tls_mode.tls_mandatory() && !session.tls {
+    if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
