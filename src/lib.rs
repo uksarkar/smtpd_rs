@@ -4,8 +4,9 @@ use std::fmt::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
+use tokio::time::timeout;
 use trust_dns_resolver::TokioAsyncResolver;
 use trust_dns_resolver::system_conf::read_system_conf;
 
@@ -142,10 +143,18 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     handler_factory: Arc<T>,
     resolver: Arc<TokioAsyncResolver>,
 ) -> Result<(), CoreError> {
-    let (remote_ip, remote_host) =
-        get_remote_info(&addr, config.disable_reverse_dns, &resolver).await;
+    let remote_host = if !config.disable_reverse_dns {
+        get_remote_host(addr.ip(), &resolver).await
+    } else {
+        "unknown".to_string()
+    };
 
-    let mut session = Session::new(&config, remote_ip, remote_host, controller.is_tls);
+    let mut session = Session::new(
+        &config,
+        addr.ip().to_string(),
+        remote_host,
+        controller.is_tls,
+    );
     let mut handler = handler_factory.new_handler(&session);
 
     // Send greeting
@@ -335,18 +344,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                 session.remote_host = session.x_client_name.to_owned();
                             } else {
                                 if let Ok(ip) = IpAddr::from_str(&session.remote_ip) {
-                                    match resolver.reverse_lookup(ip).await {
-                                        Ok(lookup) => {
-                                            if let Some(name) = lookup.iter().next() {
-                                                session.remote_host = name.to_utf8();
-                                            } else {
-                                                session.remote_host = "unknown".to_string();
-                                            }
-                                        }
-                                        Err(_) => {
-                                            session.remote_host = "unknown".to_string();
-                                        }
-                                    }
+                                    session.remote_host = get_remote_host(ip, &resolver).await;
                                 } else {
                                     session.remote_host = "unknown".to_string();
                                 }
@@ -716,25 +714,12 @@ async fn handle_data_cmd<'a>(
     Ok(data)
 }
 
-async fn get_remote_info(
-    addr: &SocketAddr,
-    disable_reverse_dns: bool,
-    resolver: &TokioAsyncResolver,
-) -> (String, String) {
-    let remote_ip = addr.ip().to_string();
-
-    let remote_host = if !disable_reverse_dns {
-        match resolver.reverse_lookup(addr.ip()).await {
-            Ok(lookup) => lookup
-                .iter()
-                .next()
-                .map(|n| n.to_utf8())
-                .unwrap_or_else(|| "unknown".to_string()),
-            Err(_) => "unknown".to_string(),
-        }
-    } else {
-        "unknown".to_string()
-    };
-
-    (remote_ip, remote_host)
+async fn get_remote_host(ip: IpAddr, resolver: &TokioAsyncResolver) -> String {
+    match timeout(Duration::from_secs(30), resolver.reverse_lookup(ip)).await {
+        Ok(res) => res
+            .ok()
+            .and_then(|lookup| lookup.iter().next().map(|n| n.to_utf8()))
+            .unwrap_or_else(|| "unknown".to_string()),
+        Err(_) => "unknown".to_string(),
+    }
 }
