@@ -283,7 +283,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                         controller.write_response(&Response::ok("OK")).await?;
                     }
                     "AUTH" => {
-                        match handle_auth_cmd(args, &mut session, &mut controller).await {
+                        match get_auth_data(args, &mut session, &mut controller).await {
                             Ok(()) => {
                                 // safe to unwrap, because the Ok() is guaranteed the data having some value
                                 let auth_data = session.auth_data.as_ref().unwrap();
@@ -300,7 +300,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                     }
                                     Err(e) => match e {
                                         Error::Response(res) if !res.is_default() => res,
-                                        _ => Response::reject("Authentication unsuccessful."),
+                                        _ => Response::Raw("535 5.7.8 Authentication credentials invalid".into()),
                                     },
                                 };
 
@@ -471,11 +471,35 @@ fn handle_start_tls_cmd<'a>(
     }
 }
 
-async fn handle_auth_cmd<'a>(
+async fn get_auth_data<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> Result<(), CoreError> {
+    if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
+        return Err(CoreError::Response(Response::reject(
+            "Must issue a STARTTLS command first",
+        )));
+    }
+
+    if session.authenticated {
+        return Err(CoreError::Response(Response::bad_sequence(
+            "Bad sequence of commands (already authenticated for this session)",
+        )));
+    }
+
+    if session.got_from || !session.to.is_empty() {
+        return Err(CoreError::Response(Response::bad_sequence(
+            "Bad sequence of commands (AUTH not permitted during mail transaction)",
+        )));
+    }
+
+    if args.is_none() || args.is_some_and(|a| a.is_empty()) {
+        return Err(CoreError::Response(Response::Raw(
+            "501 5.5.4 Malformed AUTH input (argument required)".into(),
+        )));
+    }
+
     let res = AuthMach::from_str(&args.unwrap_or_default());
     if res.is_err() {
         return Err(CoreError::Response(Response::new(
