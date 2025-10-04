@@ -28,6 +28,7 @@ pub struct SmtpConfig {
     pub timeout: Duration,
     pub auth_machs: Vec<AuthMach>,
     pub require_auth: bool,
+    pub disable_reverse_dns: bool,
 }
 
 impl Default for SmtpConfig {
@@ -46,6 +47,7 @@ impl Default for SmtpConfig {
             auth_machs: vec![],
             require_tls: false,
             require_auth: false,
+            disable_reverse_dns: false,
         }
     }
 }

@@ -17,11 +17,11 @@ pub struct Session<'a> {
     pub remote_ip: String,
     pub remote_host: String,
     pub tls: bool,
-    pub(crate) got_from: bool,
+    pub got_from: bool,
 }
 
 impl<'a> Session<'a> {
-    pub fn new(config: &'a SmtpConfig) -> Self {
+    pub fn new(config: &'a SmtpConfig, remote_ip: String, remote_host: String) -> Self {
         Self {
             authenticated: false,
             tls: false,
@@ -30,8 +30,8 @@ impl<'a> Session<'a> {
             smtp_config: config,
             to: vec![],
             auth_data: None,
-            remote_host: "".to_string(),
-            remote_ip: "".to_string(),
+            remote_host,
+            remote_ip,
             x_client: "".to_string(),
             x_client_addr: "".to_string(),
             x_client_name: "".to_string(),

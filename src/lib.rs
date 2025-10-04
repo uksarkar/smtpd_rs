@@ -1,10 +1,13 @@
 use base64::Engine;
 use base64::engine::general_purpose;
 use std::fmt::Write;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
+use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::system_conf::read_system_conf;
 
 use crate::core::ConnectionStream;
 pub use crate::core::SmtpConfig;
@@ -40,7 +43,11 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
         println!("SMTP server listening on {}", self.config.bind_addr);
 
         let config = Arc::new(self.config);
-        let handler = Arc::clone(&self.handler); // for moving into async block
+        let handler = Arc::clone(&self.handler);
+
+        // build resolver from /etc/resolv.conf (Unix) or system settings
+        let (resolver_config, opts) = read_system_conf().unwrap();
+        let resolver = Arc::new(TokioAsyncResolver::tokio(resolver_config, opts));
 
         loop {
             let (stream, peer_addr) = listener.accept().await?;
@@ -48,9 +55,10 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
 
             let config = Arc::clone(&config);
             let handler = Arc::clone(&handler);
+            let resolver = Arc::clone(&resolver);
 
             tokio::spawn(async move {
-                if let Err(e) = handle_client(stream, config, handler).await {
+                if let Err(e) = handle_client(stream, peer_addr, config, handler, resolver).await {
                     eprintln!("Error handling client {}: {}", peer_addr, e);
                 }
             });
@@ -60,11 +68,16 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
 
 async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     stream: TcpStream,
+    addr: SocketAddr,
     config: Arc<SmtpConfig>,
     handler_factory: Arc<T>,
+    resolver: Arc<TokioAsyncResolver>,
 ) -> Result<(), CoreError> {
     let mut controller = StreamController::new(ConnectionStream::Tcp(stream), config.timeout);
-    let mut session = Session::new(&config);
+    let (remote_ip, remote_host) =
+        get_remote_info(&addr, config.disable_reverse_dns, &resolver).await;
+
+    let mut session = Session::new(&config, remote_ip, remote_host);
     let mut handler = handler_factory.new_handler(&session);
 
     // Send greeting
@@ -242,12 +255,22 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             if session.x_client_name.len() > 4 {
                                 session.remote_host = session.x_client_name.to_owned();
                             } else {
-                                session.remote_host =
-                                    std::net::IpAddr::from_str(&session.remote_ip)
-                                        .ok()
-                                        .and_then(|ip| dns_lookup::lookup_addr(&ip).ok())
-                                        .filter(|host| !host.is_empty())
-                                        .unwrap_or_else(|| "unknown".to_string());
+                                if let Ok(ip) = IpAddr::from_str(&session.remote_ip) {
+                                    match resolver.reverse_lookup(ip).await {
+                                        Ok(lookup) => {
+                                            if let Some(name) = lookup.iter().next() {
+                                                session.remote_host = name.to_utf8();
+                                            } else {
+                                                session.remote_host = "unknown".to_string();
+                                            }
+                                        }
+                                        Err(_) => {
+                                            session.remote_host = "unknown".to_string();
+                                        }
+                                    }
+                                } else {
+                                    session.remote_host = "unknown".to_string();
+                                }
                             }
                         }
 
@@ -641,4 +664,27 @@ async fn handle_data_cmd<'a>(
         .await?;
 
     Ok(data)
+}
+
+async fn get_remote_info(
+    addr: &SocketAddr,
+    disable_reverse_dns: bool,
+    resolver: &TokioAsyncResolver,
+) -> (String, String) {
+    let remote_ip = addr.ip().to_string();
+
+    let remote_host = if !disable_reverse_dns {
+        match resolver.reverse_lookup(addr.ip()).await {
+            Ok(lookup) => lookup
+                .iter()
+                .next()
+                .map(|n| n.to_utf8())
+                .unwrap_or_else(|| "unknown".to_string()),
+            Err(_) => "unknown".to_string(),
+        }
+    } else {
+        "unknown".to_string()
+    };
+
+    (remote_ip, remote_host)
 }
