@@ -24,17 +24,17 @@ pub enum TlsMode {
     /// No TLS support at all
     Disabled,
 
-    /// Opportunistic TLS (STARTTLS supported), starts as plain TCP
+    /// Explicit TLS (STARTTLS supported, but optional)
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-    Opportunistic(TlsConfig),
+    Explicit(TlsConfig),
 
-    /// Required TLS via STARTTLS (plain TCP allowed initially but every command except NOOP, EHLO, STARTTLS, QUIT must be TLS)
+    /// Required TLS via STARTTLS (all commands except NOOP, EHLO, STARTTLS, QUIT must be over TLS)
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     Required(TlsConfig),
 
-    /// Fully TLS listener (implicit TLS, no plain TCP allowed)
+    /// Implicit TLS (always TLS, like SMTPS on port 465)
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-    Direct(TlsConfig),
+    Implicit(TlsConfig),
 }
 
 impl TlsMode {
@@ -43,7 +43,7 @@ impl TlsMode {
         match self {
             Self::Disabled => false,
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            Self::Opportunistic(_) | Self::Required(_) | Self::Direct(_) => true,
+            Self::Explicit(_) | Self::Required(_) | Self::Implicit(_) => true,
         }
     }
 
@@ -51,7 +51,7 @@ impl TlsMode {
     pub fn config(&self) -> Option<&TlsConfig> {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            Self::Opportunistic(cfg) | Self::Required(cfg) | Self::Direct(cfg) => Some(cfg),
+            Self::Explicit(cfg) | Self::Required(cfg) | Self::Implicit(cfg) => Some(cfg),
             _ => None,
         }
     }
@@ -60,7 +60,7 @@ impl TlsMode {
     pub fn is_direct_tls(&self) -> bool {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            Self::Direct(_) => true,
+            Self::Implicit(_) => true,
             _ => false,
         }
     }
@@ -69,7 +69,7 @@ impl TlsMode {
     pub fn allows_starttls(&self) -> bool {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            Self::Opportunistic(_) | Self::Required(_) => true,
+            Self::Explicit(_) | Self::Required(_) => true,
             _ => false,
         }
     }

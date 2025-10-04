@@ -45,9 +45,9 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
         match &self.config.tls_mode {
             TlsMode::Disabled => self.serve_plain().await,
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            TlsMode::Direct(_) => self.serve_direct().await,
+            TlsMode::Implicit(_) => self.serve_tls().await,
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            TlsMode::Opportunistic(_) | TlsMode::Required(_) => self.serve_plain().await,
+            TlsMode::Explicit(_) | TlsMode::Required(_) => self.serve_plain().await,
         }
     }
 
@@ -84,7 +84,7 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
 
     /// Fully TLS listener (implicit TLS) — feature-gated
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-    async fn serve_direct(self) -> Result<(), std::io::Error> {
+    async fn serve_tls(self) -> Result<(), std::io::Error> {
         use std::sync::Arc;
         use tokio::net::TcpListener;
 
