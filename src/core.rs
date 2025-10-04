@@ -20,6 +20,7 @@ pub mod tls;
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
     pub hostname: String,
+    pub appname: String,
     // TCP address to listen on, defaults to ":25" (all addresses, port 25) if empty
     pub bind_addr: String,
     pub tls_mode: TlsMode,
@@ -44,9 +45,10 @@ impl Default for SmtpConfig {
 
         Self {
             bind_addr: "127.0.0.1:25".to_string(),
+            appname: "smtpd-rs".to_string(),
             hostname,
             max_message_size: Some(10 * 1024 * 1024), // 10MB
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300), // 5M
             max_recipients: 100,
             auth_machs: vec![],
             require_auth: false,

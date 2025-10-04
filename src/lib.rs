@@ -159,7 +159,10 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
 
     // Send greeting
     controller
-        .write_line(format!("220 {} ESMTP Service Ready", config.hostname))
+        .write_line(format!(
+            "220 {} {} ESMTP Service ready",
+            config.hostname, config.appname
+        ))
         .await?;
 
     let mut buffer = String::new();
@@ -213,6 +216,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                             .await?;
                     }
                     "EHLO" => {
+                        // RFC 2821 section 4.1.4 specifies that EHLO has the same effect as RSET.
                         session.reset();
                         session.remote_name = args.unwrap_or_default().to_string();
 
@@ -628,9 +632,9 @@ async fn handle_mail_cmd<'a>(
         if let Some(s) = size {
             if max_size < s {
                 return Err(CoreError::Response(Response::new(
-                    452,
-                    "Max size limit exceeded",
-                    Some("4.5.3".into()),
+                    552,
+                    format!("Max size limit ({max_size}) exceeded"),
+                    Some("5.3.4".into()),
                 )));
             }
         }
