@@ -35,7 +35,62 @@ mod constants;
 mod core;
 mod utils;
 
-// SMTP Server
+/// Starts an SMTP server with the provided configuration and handler factory.
+///
+/// This is the recommended entry point for running the SMTP server. Internally, it constructs
+/// an [`SmtpServer`] instance and begins listening for incoming connections.
+///
+/// # Example
+///
+/// ```rust
+/// use smtpd_rs::{start_server, SmtpConfig, AuthMach, MyHandlerFactory};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), std::io::Error> {
+///     let config = SmtpConfig {
+///         bind_addr: "127.0.0.1:2525".to_string(),
+///         require_auth: true,
+///         auth_machs: vec![AuthMach::Plain, AuthMach::Login],
+///         ..Default::default()
+///     };
+///
+///     let factory = MyHandlerFactory {};
+///
+///     println!("Starting SMTP server on {}", config.bind_addr);
+///     start_server(config, factory).await?;
+///
+///     Ok(())
+/// }
+/// ```
+pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
+    config: SmtpConfig,
+    handler: T,
+) -> std::result::Result<(), std::io::Error> {
+    let server = SmtpServer::new(config, handler);
+    server.listen_and_serve().await
+}
+
+/// The core SMTP server struct.
+///
+/// This struct represents the foundation of the SMTP server. While it is possible to
+/// construct an `SmtpServer` instance manually and call its methods directly, the recommended
+/// approach is to use the [`start_server`] helper function. This function will internally
+/// create the server and invoke [`SmtpServer::listen_and_serve`] for you.
+///
+/// # Example
+///
+/// ```rust
+/// use smtpd_rs::{SmtpServer, start_server, SmtpConfig, MyHandlerFactory};
+///
+/// let config = SmtpConfig {
+///     bind_addr: "127.0.0.1:2525".to_string(),
+///     require_auth: true,
+///     ..Default::default()
+/// };
+///
+/// let factory = MyHandlerFactory {};
+/// start_server(config, factory).await?;
+/// ```
 pub struct SmtpServer<T: SmtpHandlerFactory + Send + Sync + 'static> {
     config: SmtpConfig,
     handler: Arc<T>,
@@ -170,6 +225,34 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
     }
 }
 
+/// Handles a single SMTP client connection.
+///
+/// This internal function manages all aspects of the client session:
+/// - Reads commands from the client and parses them
+/// - Writes responses to the client
+/// - Invokes the appropriate [`SmtpHandler`] methods for AUTH, MAIL, RCPT, DATA, etc.
+/// - Applies TLS negotiation if required by the server configuration
+///
+/// This function is called for each accepted connection and runs within a dedicated
+/// Tokio task.
+///
+/// # Parameters
+/// - `controller`: The [`StreamController`] for reading from and writing to the connection.
+/// - `addr`: The socket address of the connected client.
+/// - `config`: Shared SMTP server configuration (`SmtpConfig`).
+/// - `handler_factory`: Factory for creating per-session handler instances.
+/// - `resolver`: DNS resolver used for reverse lookups and MX resolution.
+/// - `provider` (optional, TLS-only): TLS acceptor used for upgrading TCP streams to TLS.
+///
+/// # Returns
+/// Returns `Ok(())` on successful handling of the session, or a [`CoreError`] if any
+/// internal error occurs.
+///
+/// # Notes
+/// - This function is async and designed to be spawned in a Tokio task per connection.
+/// - TLS negotiation (STARTTLS or implicit TLS) is applied automatically if `provider` is `Some`.
+/// - All authentication and mail commands are delegated to the handler returned by
+///   `handler_factory.new_handler(session)`.
 async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     mut controller: StreamController,
     addr: SocketAddr,
@@ -505,16 +588,29 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     Ok(())
 }
 
-// Convenience function to create server
-pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
-    config: SmtpConfig,
-    handler: T,
-) -> std::result::Result<(), std::io::Error> {
-    let server = SmtpServer::new(config, handler);
-    server.listen_and_serve().await
-}
-
-// handle start tls server
+/// Internal helper to validate a STARTTLS command request.
+///
+/// This function **does not perform any I/O**. It only checks whether the client
+/// is allowed to initiate the STARTTLS command based on the current session and
+/// server configuration.
+///
+/// # Parameters
+/// - `args`: Optional arguments provided with the STARTTLS command. Any non-empty
+///   argument will result in a syntax error.
+/// - `controller`: Reference to the [`StreamController`] of the current connection.
+///   Used to check whether the session is already TLS-secured.
+/// - `session`: Reference to the current [`Session`], used to inspect server TLS configuration.
+///
+/// # Returns
+/// - `Ok(())` if the client is allowed to initiate STARTTLS.
+/// - `Err(CoreError::Response(...))` if:
+///   - The command includes unexpected arguments (syntax error)
+///   - The connection is already TLS-secured (bad sequence)
+///   - TLS is not configured or STARTTLS is not allowed (not implemented)
+///
+/// # Notes
+/// - This function is called internally during command processing before attempting
+///   to upgrade the connection to TLS.
 fn handle_start_tls_cmd<'a>(
     args: Option<&str>,
     controller: &StreamController,
@@ -542,6 +638,39 @@ fn handle_start_tls_cmd<'a>(
     Err(CoreError::Response(Response::not_implemented()))
 }
 
+/// Internal helper to extract authentication data from the client.
+///
+/// This function validates whether the client is allowed to initiate the AUTH command,
+/// checks the requested authentication mechanism, and reads the credentials according
+/// to the selected mechanism (PLAIN, LOGIN, or CRAM-MD5).
+///
+/// # Parameters
+/// - `args`: Optional argument passed with the AUTH command, usually the authentication mechanism name.
+/// - `session`: Mutable reference to the current [`Session`]. Used to check session state and TLS requirements.
+/// - `controller`: Mutable reference to the [`StreamController`] of the current connection. Used to read/write to the client.
+///
+/// # Returns
+/// Returns an [`AuthData`] variant containing the parsed authentication credentials.
+///
+/// # Errors
+/// Returns [`CoreError::Response`] with appropriate [`Response`] in the following cases:
+/// - TLS is required but the connection is not secured (`"Must issue a STARTTLS command first"`).
+/// - The client is already authenticated (`"Bad sequence of commands (already authenticated for this session)"`).
+/// - AUTH command is issued during an ongoing mail transaction (`"AUTH not permitted during mail transaction"`).
+/// - Missing or malformed AUTH arguments (`"501 5.5.4 Malformed AUTH input"`).
+/// - Unsupported or unrecognized authentication mechanism (`"504 5.5.4 Unrecognized authentication type"`).
+/// - Parsing errors or invalid credential format (`"Syntax error (unable to parse)"` or `"Authentication cancelled"`).
+/// - Authentication failed after parsing credentials (`"Authentication credentials invalid"`).
+///
+/// # Example
+/// ```no_run
+/// # use smtpd_rs::{Session, StreamController, get_auth_data};
+/// # async fn example(mut session: Session<'_>, mut controller: StreamController) {
+/// let args = Some("PLAIN dGVzdAB0ZXN0ADEyMw=="); // example base64-encoded credentials
+/// let auth_data = get_auth_data(args, &mut session, &mut controller).await?;
+/// // `auth_data` now contains username and password
+/// # }
+/// ```
 async fn get_auth_data<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
@@ -697,39 +826,73 @@ async fn get_auth_data<'a>(
     Ok(data.unwrap())
 }
 
+/// Internal helper to handle the `MAIL` command.
+///
+/// This function validates the MAIL command parameters, enforces TLS and authentication
+/// requirements, checks the `SIZE` parameter (if provided), and updates the session state.
+///
+/// # Parameters
+/// - `args`: Optional argument passed with the MAIL command, usually `"FROM:<address> [parameters]"`.
+/// - `session`: Mutable reference to the current [`Session`]. Used to validate and update session state.
+/// - `controller`: Mutable reference to the [`StreamController`] for reading/writing responses.
+///
+/// # Behavior
+/// - Rejects the command if TLS is required but not active.
+/// - Rejects if authentication is required but the client is not authenticated.
+/// - Parses the `FROM` address and optional parameters; rejects if malformed.
+/// - Validates the `SIZE` parameter, if present, against server configuration.
+/// - Updates the session's `from`, `got_from`, and clears the recipients list (`to`).
+/// - Sends a `250 Ok` response on success.
+///
+/// # Errors
+/// Returns [`CoreError::Response`] with appropriate [`Response`] in the following cases:
+/// - TLS is mandatory but not active (`"Must issue a STARTTLS command first"`).
+/// - Authentication is required but not completed (`"Authentication required"`).
+/// - Malformed FROM argument (`"Syntax error in FROM parameter"`).
+/// - Invalid SIZE parameter (`"Invalid SIZE parameter"`).
+/// - Message exceeds configured maximum size (`"Max size limit (<max_size>) exceeded"`).
+///
+/// # Example
+/// ```no_run
+/// # use smtpd_rs::{Session, StreamController, handle_mail_cmd};
+/// # async fn example(mut session: Session<'_>, mut controller: StreamController) {
+/// let args = Some("FROM:<alice@example.com> SIZE=1024");
+/// handle_mail_cmd(args, &mut session, &mut controller).await?;
+/// # }
+/// ```
 async fn handle_mail_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> std::result::Result<(), CoreError> {
+    // Enforce TLS if required
     if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
     }
 
+    // Enforce authentication if required
     if session.smtp_config.require_auth && !session.authenticated {
         return Err(CoreError::Response(Response::reject(
             "Authentication required",
         )));
     }
 
-    let res = crate::utils::parser::parse_mail_from(args.unwrap_or_default());
-    if res.is_none() {
-        return Err(CoreError::Response(Response::syntax_error(
-            "Syntax error in FROM parameter",
-        )));
-    }
+    // Parse MAIL FROM argument
+    let (from, params) = crate::utils::parser::parse_mail_from(args.unwrap_or_default())
+        .ok_or_else(|| {
+            CoreError::Response(Response::syntax_error("Syntax error in FROM parameter"))
+        })?;
 
-    let (from, params) = res.unwrap();
-    let has_params = params.as_ref().is_some_and(|p| !p.is_empty());
+    // Validate SIZE parameter, if provided
+    let size = params
+        .as_ref()
+        .filter(|p| !p.is_empty())
+        .map(|p| crate::utils::parser::parse_size(p.as_str()))
+        .flatten();
 
-    let size = match params {
-        Some(arg_str) => crate::utils::parser::parse_size(arg_str.as_str()),
-        None => None,
-    };
-
-    if has_params && size.is_none() {
+    if params.is_some() && size.is_none() {
         return Err(CoreError::Response(Response::syntax_error(
             "Invalid SIZE parameter",
         )));
@@ -737,7 +900,7 @@ async fn handle_mail_cmd<'a>(
 
     if let Some(max_size) = session.smtp_config.max_message_size {
         if let Some(s) = size {
-            if max_size < s {
+            if s > max_size {
                 return Err(CoreError::Response(Response::new(
                     552,
                     format!("Max size limit ({max_size}) exceeded"),
@@ -747,36 +910,66 @@ async fn handle_mail_cmd<'a>(
         }
     }
 
+    // Update session state
     session.from = from.to_string();
     session.got_from = true;
     session.to.clear();
+
+    // Send success response
     controller.write_response(&Response::ok("Ok")).await?;
     Ok(())
 }
 
+/// Internal helper to extract the recipient address from the RCPT command argument.
+///
+/// This function validates the session state, enforces TLS and authentication requirements,
+/// checks the MAIL command has been issued, and ensures the recipient limit is not exceeded.
+///
+/// # Parameters
+/// - `args`: Optional argument passed with the RCPT command, usually `"TO:<address> [parameters]"`.
+/// - `session`: Mutable reference to the current [`Session`].
+///
+/// # Behavior
+/// - Rejects if TLS is mandatory but not active.
+/// - Rejects if authentication is required but not yet completed.
+/// - Rejects if MAIL command has not been issued yet (`got_from` is false).
+/// - Rejects if adding the recipient would exceed `max_recipients` limit.
+/// - Parses the recipient address from the command argument.
+///
+/// # Errors
+/// Returns [`CoreError::Response`] with an appropriate [`Response`] in the following cases:
+/// - TLS is mandatory but not active (`"Must issue a STARTTLS command first"`).
+/// - Authentication is required but not completed (`"Authentication required"`).
+/// - MAIL command not yet issued (`"Bad sequence of commands (MAIL required before RCPT)"`).
+/// - Max recipient limit exceeded (`"Max recipient limit exceeded"`).
+/// - Malformed TO argument (`"Syntax error in parameters or arguments (invalid TO parameter)"`).
 async fn extract_rcpt_from_arg<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
 ) -> std::result::Result<String, CoreError> {
+    // Enforce TLS if required
     if session.smtp_config.tls_mode.tls_mandatory() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
     }
 
+    // Enforce authentication if required
     if session.smtp_config.require_auth && !session.authenticated {
         return Err(CoreError::Response(Response::reject(
             "Authentication required",
         )));
     }
 
+    // Ensure MAIL command has been issued
     if !session.got_from {
         return Err(CoreError::Response(Response::bad_sequence(
             "Bad sequence of commands (MAIL required before RCPT)",
         )));
     }
 
-    if session.smtp_config.max_recipients == session.to.len() {
+    // Enforce max recipient limit
+    if session.to.len() >= session.smtp_config.max_recipients {
         return Err(CoreError::Response(Response::new(
             452,
             "Max recipient limit exceeded",
@@ -784,42 +977,66 @@ async fn extract_rcpt_from_arg<'a>(
         )));
     }
 
-    let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default());
-    if to.is_none() {
-        return Err(CoreError::Response(Response::syntax_error(
+    // Parse the recipient address
+    let to = crate::utils::parser::parse_rcpt_to(&args.unwrap_or_default()).ok_or_else(|| {
+        CoreError::Response(Response::syntax_error(
             "Syntax error in parameters or arguments (invalid TO parameter)",
-        )));
-    }
+        ))
+    })?;
 
-    Ok(to.unwrap().to_string())
+    Ok(to.to_string())
 }
 
+/// Internal helper to read the message body after the DATA command.
+///
+/// This function validates the session state, enforces TLS and authentication requirements,
+/// ensures that MAIL and at least one RCPT command have been successfully processed,
+/// prompts the client to start sending mail data, and reads the message until the
+/// terminating line (`.<CRLF>`).
+///
+/// # Parameters
+/// - `session`: Mutable reference to the current [`Session`].
+/// - `controller`: Mutable reference to the [`StreamController`] handling read/write.
+///
+/// # Returns
+/// Returns the raw message data as a `Vec<u8>`.
+///
+/// # Errors
+/// Returns [`CoreError::Response`] with an appropriate [`Response`] if:
+/// - TLS is required but not active.
+/// - Authentication is required but not completed.
+/// - MAIL or RCPT commands have not yet been issued.
 async fn extract_mail_data<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
 ) -> std::result::Result<Vec<u8>, CoreError> {
+    // Enforce TLS if required
     if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
         )));
     }
 
+    // Enforce authentication if required
     if session.smtp_config.require_auth && !session.authenticated {
         return Err(CoreError::Response(Response::reject(
             "Authentication required",
         )));
     }
 
-    if !session.got_from || session.to.len() == 0 {
+    // Ensure MAIL & RCPT commands have been issued
+    if !session.got_from || session.to.is_empty() {
         return Err(CoreError::Response(Response::bad_sequence(
             "Bad sequence of commands (MAIL & RCPT required before DATA)",
         )));
     }
 
+    // Prompt client to start sending the message body
     controller
         .write_line("354 Start mail input; end with <CR><LF>.<CR><LF>")
         .await?;
 
+    // Read the message data with optional maximum size limit
     let data = controller
         .read_mail_data(session.smtp_config.max_message_size)
         .await?;
@@ -827,12 +1044,24 @@ async fn extract_mail_data<'a>(
     Ok(data)
 }
 
+/// Performs a reverse DNS lookup for the given IP address using the provided resolver.
+/// Returns the first resolved hostname as a `String`, or `"unknown"` if the lookup fails or times out.
+///
+/// # Parameters
+/// - `ip`: The IP address to resolve.
+/// - `resolver`: A reference to a `TokioAsyncResolver` instance.
+///
+/// # Returns
+/// A `String` representing the resolved hostname, or `"unknown"` if lookup fails.
 async fn get_remote_host(ip: IpAddr, resolver: &TokioAsyncResolver) -> String {
-    match timeout(Duration::from_secs(30), resolver.reverse_lookup(ip)).await {
-        Ok(res) => res
-            .ok()
-            .and_then(|lookup| lookup.iter().next().map(|n| n.to_utf8()))
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    match timeout(TIMEOUT, resolver.reverse_lookup(ip)).await {
+        Ok(Ok(lookup)) => lookup
+            .iter()
+            .next()
+            .map(|n| n.to_utf8())
             .unwrap_or_else(|| "unknown".to_string()),
-        Err(_) => "unknown".to_string(),
+        _ => "unknown".to_string(),
     }
 }
