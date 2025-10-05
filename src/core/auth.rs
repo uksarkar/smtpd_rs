@@ -2,6 +2,18 @@ use std::fmt::Display;
 
 use crate::{core::error::Error, utils};
 
+/// Represents the supported SMTP authentication mechanisms.
+///
+/// These variants correspond to the authentication methods
+/// that the server can advertise and handle during the SMTP session.
+///
+/// Currently supported mechanisms:
+/// - [`Plain`] — AUTH PLAIN as defined in [RFC 4616].
+/// - [`Login`] — AUTH LOGIN (non-standard but widely supported).
+/// - [`CramMD5`] — AUTH CRAM-MD5 as defined in [RFC 2195].
+///
+/// [RFC 4616]: https://datatracker.ietf.org/doc/html/rfc4616
+/// [RFC 2195]: https://datatracker.ietf.org/doc/html/rfc2195
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuthMach {
     Plain,
@@ -36,6 +48,45 @@ impl AuthMach {
     }
 }
 
+/// Represents the parsed authentication data provided by the client.
+///
+/// This enum encapsulates the appropriate data structure for each supported
+/// authentication mechanism. It is typically constructed internally by the
+/// SMTP server when the client issues an `AUTH` command.
+///
+/// The resulting instance is accessible through the [`Session`](crate::core::session)'s
+/// [`auth_data`](crate::core::session::Session::auth_data) property and is passed directly
+/// to the [`SmtpHandler::handle_auth`](crate::core::handler::SmtpHandler::handle_auth) method.
+///
+/// # Example
+///
+/// ```
+/// use smtpd_rs::{SmtpHandler, Session, AuthData, Response, Error};
+///
+/// struct MyHandler;
+///
+/// impl SmtpHandler for MyHandler {
+///     fn handle_auth(
+///         &mut self,
+///         _session: &Session,
+///         data: &AuthData,
+///     ) -> Result<Response, Error> {
+///         let (username, password, _) = data.data();
+///
+///         if username == "abc" && password == "efg" {
+///             return Ok(Response::Default);
+///         }
+///
+///         Err(Error::Abort)
+///     }
+/// }
+/// ```
+///
+/// # Variants
+///
+/// - [`Plain`] — Represents AUTH PLAIN credentials.
+/// - [`Login`] — Represents AUTH LOGIN credentials.
+/// - [`CramMD5`] — Represents AUTH CRAM-MD5 credentials, including the shared challenge.
 #[derive(Debug, Clone)]
 pub enum AuthData {
     Plain {
