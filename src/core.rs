@@ -210,8 +210,6 @@ impl ConnectionStream {
             #[cfg(feature = "rustls-backend")]
             Self::Rustls(_) => true,
             Self::Tcp(_) => false,
-            #[cfg(not(any(feature = "native-tls-backend", feature = "rustls-backend")))]
-            _ => false,
         }
     }
 }

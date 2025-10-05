@@ -105,6 +105,7 @@ pub use crate::core::session::Session;
 use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
 pub use crate::core::tls::TlsMode;
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 use crate::core::tls::TlsProvider;
 pub use async_trait::async_trait;
 
@@ -190,11 +191,9 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
     /// Entry point: dispatch based on TLS mode
     pub async fn listen_and_serve(self) -> std::result::Result<(), std::io::Error> {
         match &self.config.tls_mode {
-            TlsMode::Disabled => self.serve_plain().await,
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
             TlsMode::Implicit(_) => self.serve_tls().await,
-            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-            TlsMode::Explicit(_) | TlsMode::Required(_) => self.serve_plain().await,
+            _ => self.serve_plain().await,
         }
     }
 

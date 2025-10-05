@@ -1,7 +1,9 @@
 use std::fmt::Debug;
 
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 use tokio::net::TcpStream;
 
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 use crate::{
     Response,
     core::{ConnectionStream, error::Error},
@@ -59,13 +61,13 @@ pub enum TlsConfig {
 }
 
 impl core::fmt::Debug for TlsConfig {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             #[cfg(feature = "native-tls-backend")]
-            Self::NativeTls(_) => write!(f, "TlsConfig::NativeTls(<identity>)"),
+            Self::NativeTls(_) => write!(_f, "TlsConfig::NativeTls(<identity>)"),
 
             #[cfg(feature = "rustls-backend")]
-            Self::Rustls(_) => write!(f, "TlsConfig::Rustls(<config>)"),
+            Self::Rustls(_) => write!(_f, "TlsConfig::Rustls(<config>)"),
 
             #[allow(unreachable_patterns)]
             _ => Err(core::fmt::Error),
@@ -78,6 +80,7 @@ impl core::fmt::Debug for TlsConfig {
 /// [`TlsConfig`] and reused.
 ///
 /// This ensures better performance and proper TLS handshakes per connection.
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 #[derive(Clone)]
 pub(crate) enum TlsProvider {
     #[cfg(feature = "native-tls-backend")]
@@ -87,6 +90,7 @@ pub(crate) enum TlsProvider {
     Rustls(tokio_rustls::TlsAcceptor),
 }
 
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 impl core::fmt::Debug for TlsProvider {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -94,13 +98,11 @@ impl core::fmt::Debug for TlsProvider {
             Self::NativeTls(_) => f.write_str("TlsProvider::NativeTls"),
             #[cfg(feature = "rustls-backend")]
             Self::Rustls(_) => f.write_str("TlsProvider::Rustls"),
-
-            #[allow(unreachable_patterns)]
-            _ => Err(core::fmt::Error),
         }
     }
 }
 
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 impl TryFrom<&TlsConfig> for TlsProvider {
     type Error = Error;
 
@@ -126,6 +128,7 @@ impl TryFrom<&TlsConfig> for TlsProvider {
     }
 }
 
+#[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
 impl TlsProvider {
     /// Performs a TLS handshake on the given TCP stream, returning a
     /// `ConnectionStream` with the negotiated TLS connection.
@@ -138,9 +141,6 @@ impl TlsProvider {
 
             #[cfg(feature = "rustls-backend")]
             Self::Rustls(acceptor) => Ok(ConnectionStream::Rustls(acceptor.accept(stream).await?)),
-
-            #[allow(unreachable_patterns)]
-            _ => Err(Error::Response(Response::not_implemented())),
         }
     }
 }
