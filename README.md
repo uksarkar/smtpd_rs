@@ -1,4 +1,6 @@
-# smtpd-rs
+# smtpd
+
+> ⚠️ **BETA** — Use with caution, API may change
 
 `smtpd` is an asynchronous, extensible SMTP server library built on top of `tokio`.
 Inspired by [smtpd](https://github.com/mhale/smtpd).
