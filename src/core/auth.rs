@@ -36,14 +36,14 @@ impl Display for AuthMach {
 }
 
 impl AuthMach {
-    pub fn from_str(line: &str) -> Result<(Self, Option<&str>), Error> {
+    pub(crate) fn from_str(line: &str) -> Result<(Self, Option<&str>), Error> {
         let (mach, credentials) = utils::parser::parse_cmd(line);
 
         match mach.as_str() {
             "PLAIN" => Ok((Self::Plain, credentials)),
             "LOGIN" => Ok((Self::Login, credentials)),
             "CRAM-MD5" => Ok((Self::CramMD5, credentials)),
-            _ => Err(Error::UnrecognizedAuthMach(mach)),
+            _ => Err(Error::UnrecognizedAuthMach),
         }
     }
 }

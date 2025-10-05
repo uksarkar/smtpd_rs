@@ -110,7 +110,6 @@ impl StreamController {
                 if total_size + processed_line.len() > max {
                     return Err(Error::MaxSizeExceeded {
                         limit: max,
-                        got: total_size + processed_line.len(),
                     });
                 }
             }

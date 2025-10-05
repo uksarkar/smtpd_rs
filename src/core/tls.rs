@@ -28,7 +28,7 @@ impl core::fmt::Debug for TlsConfig {
 }
 
 #[derive(Clone)]
-pub enum TlsProvider {
+pub(crate) enum TlsProvider {
     #[cfg(feature = "native-tls-backend")]
     NativeTls(tokio_native_tls::TlsAcceptor),
 

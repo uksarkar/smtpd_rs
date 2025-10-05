@@ -38,15 +38,13 @@ use crate::Response;
 /// }
 /// ```
 #[derive(Debug)]
-pub enum Error {
+pub(crate) enum Error {
     Io(std::io::Error),
     InvalidLineEnding,
     MaxSizeExceeded {
         limit: usize,
-        got: usize,
     },
-    UnrecognizedAuthMach(String),
-    InvalidTLSConfiguration,
+    UnrecognizedAuthMach,
     Response(Response),
     DecodeErr(base64::DecodeError),
     Timeout,
@@ -63,7 +61,7 @@ impl TryInto<Response> for Error {
             Self::DecodeErr(e) => Ok(Response::syntax_error(format!(
                 "Invalid base64 encoding: {e}"
             ))),
-            Self::MaxSizeExceeded { limit, got: _ } => Ok(Response::reject(format!(
+            Self::MaxSizeExceeded { limit } => Ok(Response::reject(format!(
                 "Message size limit {limit} exceeded."
             ))),
             Self::Response(res) => Ok(res),
