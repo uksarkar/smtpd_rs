@@ -9,7 +9,7 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 description = "Asynchronous, extensible SMTP server library built on Tokio"
 keywords = ["smtp", "smtpd", "server", "mail", "email"]
-categories = ["network-programming", "asynchronous", "protocols"]
+categories = ["email", "network-programming", "asynchronous"]
 exclude = [
     ".vscode/",
     "*.orig",
