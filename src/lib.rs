@@ -23,6 +23,13 @@ use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
 pub use crate::core::tls::TlsMode;
 use crate::core::tls::TlsProvider;
+pub use async_trait::async_trait;
+
+#[cfg(feature = "native-tls-backend")]
+pub use native_tls::Identity;
+
+#[cfg(feature = "rustls-backend")]
+pub use rustls::ServerConfig;
 
 mod constants;
 mod core;
@@ -332,7 +339,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                 // safe to unwrap, because the Ok() is guaranteed the data having some value
                                 let auth_data = session.auth_data.as_ref().unwrap();
 
-                                match handler.handle_auth(&session, auth_data) {
+                                match handler.handle_auth(&session, auth_data).await {
                                     Ok(res) => {
                                         session.authenticated = true;
                                         controller
@@ -367,7 +374,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     "DATA" => {
                         match extract_mail_data(&mut session, &mut controller).await {
                             Ok(data) => {
-                                match handler.handle_email(&session, data) {
+                                match handler.handle_email(&session, data).await {
                                     Ok(r) => {
                                         controller
                                             .write_response(&if r.is_default() {
@@ -449,7 +456,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     "RCPT" => {
                         match extract_rcpt_from_arg(args, &mut session).await {
                             Ok(to) => {
-                                match handler.handle_rcpt(&session, &to) {
+                                match handler.handle_rcpt(&session, &to).await {
                                     Ok(res) => {
                                         session.to.push(to);
 

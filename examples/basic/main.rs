@@ -19,8 +19,9 @@ async fn main() -> Result<(), std::io::Error> {
 
 struct MyHandler {}
 
+#[smtpd_rs::async_trait]
 impl smtpd_rs::SmtpHandler for MyHandler {
-    fn handle_auth(
+    async fn handle_auth(
         &mut self,
         _session: &smtpd_rs::Session,
         data: &smtpd_rs::AuthData,
@@ -34,11 +35,12 @@ impl smtpd_rs::SmtpHandler for MyHandler {
         Err(smtpd_rs::Error::Abort)
     }
 
-    fn handle_rcpt(
+    async fn handle_rcpt(
         &mut self,
         _session: &smtpd_rs::Session,
         to: &str,
     ) -> Result<smtpd_rs::Response, smtpd_rs::Error> {
+        // allow recipients only from gmail
         if to.ends_with("gmail.com") {
             return Ok(smtpd_rs::Response::Default);
         }
