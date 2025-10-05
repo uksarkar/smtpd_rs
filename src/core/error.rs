@@ -39,7 +39,7 @@ use crate::Response;
 /// ```
 #[derive(Debug)]
 pub(crate) enum Error {
-    Io(std::io::Error),
+    Io,
     InvalidLineEnding,
     MaxSizeExceeded {
         limit: usize,
@@ -49,7 +49,7 @@ pub(crate) enum Error {
     DecodeErr(base64::DecodeError),
     Timeout,
     #[cfg(feature = "native-tls-backend")]
-    NativeTlsErr(native_tls::Error),
+    NativeTlsErr,
 }
 
 impl TryInto<Response> for Error {
@@ -75,8 +75,8 @@ impl TryInto<Response> for Error {
 }
 
 impl From<std::io::Error> for Error {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
+    fn from(_: std::io::Error) -> Self {
+        Self::Io
     }
 }
 
@@ -94,8 +94,8 @@ impl From<Elapsed> for Error {
 
 #[cfg(feature = "native-tls-backend")]
 impl From<native_tls::Error> for Error {
-    fn from(e: native_tls::Error) -> Self {
-        Error::NativeTlsErr(e)
+    fn from(_: native_tls::Error) -> Self {
+        Error::NativeTlsErr
     }
 }
 
