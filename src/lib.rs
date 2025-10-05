@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::system_conf::read_system_conf;
 
 use crate::core::ConnectionStream;
@@ -20,7 +21,8 @@ pub use crate::core::response_error::Error;
 pub use crate::core::session::Session;
 use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
-use crate::core::tls::TlsMode;
+pub use crate::core::tls::TlsMode;
+use crate::core::tls::TlsProvider;
 
 mod constants;
 mod core;
@@ -59,8 +61,16 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
         let config = Arc::new(self.config);
         let handler = Arc::clone(&self.handler);
 
-        let (resolver_config, opts) = read_system_conf().unwrap();
+        let (resolver_config, opts) = read_system_conf()
+            .unwrap_or_else(|_| (ResolverConfig::default(), ResolverOpts::default()));
         let resolver = Arc::new(TokioAsyncResolver::tokio(resolver_config, opts));
+
+        #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+        let tls_provider: Option<Arc<TlsProvider>> = config
+            .tls_mode
+            .config()
+            .and_then(|cnf| cnf.try_into().ok())
+            .map(Arc::new);
 
         loop {
             let (stream, peer_addr) = listener.accept().await?;
@@ -70,11 +80,22 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
             let handler = Arc::clone(&handler);
             let resolver = Arc::clone(&resolver);
 
+            #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+            let provider = tls_provider.clone();
+
             let controller = StreamController::new(ConnectionStream::Tcp(stream), config.timeout);
 
             tokio::spawn(async move {
-                if let Err(e) =
-                    handle_client(controller, peer_addr, config, handler, resolver).await
+                if let Err(e) = handle_client(
+                    controller,
+                    peer_addr,
+                    config,
+                    handler,
+                    resolver,
+                    #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
+                    provider,
+                )
+                .await
                 {
                     eprintln!("Error handling client {}: {}", peer_addr, e);
                 }
@@ -104,32 +125,38 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
         let (resolver_config, opts) = read_system_conf().unwrap();
         let resolver = Arc::new(TokioAsyncResolver::tokio(resolver_config, opts));
 
+        let tls_provider: Arc<TlsProvider> = tls_config
+            .try_into()
+            .ok()
+            .map(Arc::new)
+            .expect("Failed initializing tls provider");
+
         loop {
-            let (tcp_stream, peer_addr) = listener.accept().await?;
+            let (stream, peer_addr) = listener.accept().await?;
             println!("New TLS connection from {}", peer_addr);
+
+            let stream = tls_provider
+                .accept(stream)
+                .await
+                .expect("Failed tls handshake.");
 
             let config = Arc::clone(&config);
             let handler = Arc::clone(&handler);
             let resolver = Arc::clone(&resolver);
-            let tls_config = tls_config.clone();
 
             tokio::spawn(async move {
                 // Upgrade TCP to TLS based on feature
-                match ConnectionStream::Tcp(tcp_stream)
-                    .upgrade_to_tls(&tls_config)
-                    .await
+                if let Err(e) = handle_client(
+                    StreamController::new(stream, config.timeout),
+                    peer_addr,
+                    config,
+                    handler,
+                    resolver,
+                    None,
+                )
+                .await
                 {
-                    Ok(controller_stream) => {
-                        let controller = StreamController::new(controller_stream, config.timeout);
-                        if let Err(e) =
-                            handle_client(controller, peer_addr, config, handler, resolver).await
-                        {
-                            eprintln!("Error handling TLS client {}: {}", peer_addr, e);
-                        }
-                    }
-                    Err(err) => {
-                        eprintln!("TLS handshake failed for {}: {:?}", peer_addr, err);
-                    }
+                    eprintln!("Error handling TLS client {}: {}", peer_addr, e);
                 }
             });
         }
@@ -142,6 +169,9 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     config: Arc<SmtpConfig>,
     handler_factory: Arc<T>,
     resolver: Arc<TokioAsyncResolver>,
+    #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))] provider: Option<
+        Arc<TlsProvider>,
+    >,
 ) -> Result<(), CoreError> {
     let remote_host = if !config.disable_reverse_dns {
         get_remote_host(addr.ip(), &resolver).await
@@ -179,13 +209,26 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                 match command.as_str() {
                     "STARTTLS" => {
                         match handle_start_tls_cmd(args, &controller, &session) {
-                            Ok(tls_config) => {
+                            Ok(()) => {
                                 // Inform client we’re ready
                                 controller.write_line("220 Ready to start TLS").await?;
 
-                                // Attempt TLS upgrade
-                                let new_ctrl = controller.upgrade_to_tls(tls_config).await?;
-                                controller = new_ctrl;
+                                let stream: ConnectionStream = controller.into();
+
+                                #[cfg(any(
+                                    feature = "native-tls-backend",
+                                    feature = "rustls-backend"
+                                ))]
+                                let stream = match stream {
+                                    ConnectionStream::Tcp(stream) => match provider.as_ref() {
+                                        Some(p) => p.accept(stream).await?,
+                                        None => ConnectionStream::Tcp(stream),
+                                    },
+                                    _ => stream,
+                                };
+
+                                controller =
+                                    StreamController::new(stream, session.smtp_config.timeout);
 
                                 // RFC 3207 specifies that the server must discard any prior knowledge obtained from the client.
                                 session.remote_name.clear();
@@ -454,7 +497,7 @@ fn handle_start_tls_cmd<'a>(
     args: Option<&str>,
     controller: &StreamController,
     session: &Session<'a>,
-) -> Result<&'a TlsConfig, CoreError> {
+) -> Result<(), CoreError> {
     // Reject if arguments are provided
     if args.is_some_and(|s| !s.is_empty()) {
         return Err(CoreError::Response(Response::syntax_error(
@@ -470,10 +513,11 @@ fn handle_start_tls_cmd<'a>(
     }
 
     // Check if TLS is configured
-    match session.smtp_config.tls_mode.config() {
-        Some(cnf) => Ok(cnf),
-        None => Err(CoreError::Response(Response::not_implemented())),
+    if session.smtp_config.tls_mode.allows_starttls() {
+        return Ok(());
     }
+
+    Err(CoreError::Response(Response::not_implemented()))
 }
 
 async fn get_auth_data<'a>(

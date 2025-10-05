@@ -1,6 +1,12 @@
 use std::fmt::Debug;
 
-// TLS Configuration
+use tokio::net::TcpStream;
+
+use crate::{
+    Response,
+    core::{ConnectionStream, error::Error},
+};
+
 #[derive(Clone)]
 pub enum TlsConfig {
     #[cfg(feature = "native-tls-backend")]
@@ -10,11 +16,75 @@ pub enum TlsConfig {
     Rustls(rustls::ServerConfig),
 }
 
-impl Debug for TlsConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for TlsConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NativeTls(_) => f.debug_tuple("NativeTls").finish(),
-            _ => write!(f, "{:?}", self),
+            #[cfg(feature = "native-tls-backend")]
+            Self::NativeTls(_) => write!(f, "TlsConfig::NativeTls(<identity>)"),
+            #[cfg(feature = "rustls-backend")]
+            Self::Rustls(_) => write!(f, "TlsConfig::Rustls(<config>)"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum TlsProvider {
+    #[cfg(feature = "native-tls-backend")]
+    NativeTls(tokio_native_tls::TlsAcceptor),
+
+    #[cfg(feature = "rustls-backend")]
+    Rustls(tokio_rustls::TlsAcceptor),
+}
+
+impl core::fmt::Debug for TlsProvider {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            #[cfg(feature = "native-tls-backend")]
+            Self::NativeTls(_) => f.write_str("TlsProvider::NativeTls"),
+            #[cfg(feature = "rustls-backend")]
+            Self::Rustls(_) => f.write_str("TlsProvider::Rustls"),
+        }
+    }
+}
+
+impl TryFrom<&TlsConfig> for TlsProvider {
+    type Error = Error;
+
+    fn try_from(value: &TlsConfig) -> Result<Self, Self::Error> {
+        match value {
+            #[cfg(feature = "native-tls-backend")]
+            TlsConfig::NativeTls(identity) => {
+                use tokio_native_tls::{TlsAcceptor, native_tls};
+                let acceptor = native_tls::TlsAcceptor::builder(identity.clone()).build()?;
+                Ok(Self::NativeTls(TlsAcceptor::from(acceptor)))
+            }
+
+            #[cfg(feature = "rustls-backend")]
+            TlsConfig::Rustls(config) => {
+                use std::sync::Arc;
+                use tokio_rustls::TlsAcceptor;
+                Ok(Self::Rustls(TlsAcceptor::from(Arc::new(config.clone()))))
+            }
+
+            #[allow(unreachable_patterns)]
+            _ => Err(Error::Response(Response::not_implemented())),
+        }
+    }
+}
+
+impl TlsProvider {
+    pub async fn accept(&self, stream: TcpStream) -> Result<ConnectionStream, Error> {
+        match self {
+            #[cfg(feature = "native-tls-backend")]
+            Self::NativeTls(acceptor) => {
+                Ok(ConnectionStream::NativeTls(acceptor.accept(stream).await?))
+            }
+
+            #[cfg(feature = "rustls-backend")]
+            Self::Rustls(acceptor) => Ok(ConnectionStream::Rustls(acceptor.accept(stream).await?)),
+
+            #[allow(unreachable_patterns)]
+            _ => Err(Error::Response(Response::not_implemented())),
         }
     }
 }

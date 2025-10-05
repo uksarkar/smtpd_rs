@@ -5,10 +5,7 @@ use tokio::{
     time::timeout,
 };
 
-use crate::{
-    TlsConfig,
-    core::{ConnectionStream, error::Error},
-};
+use crate::core::{ConnectionStream, error::Error};
 
 // StreamController with proper generics
 pub struct StreamController {
@@ -16,6 +13,12 @@ pub struct StreamController {
     pub writer: BufWriter<WriteHalf<ConnectionStream>>,
     pub is_tls: bool,
     timeout: core::time::Duration,
+}
+
+impl Into<ConnectionStream> for StreamController {
+    fn into(self) -> ConnectionStream {
+        self.reader.into_inner().unsplit(self.writer.into_inner())
+    }
 }
 
 impl StreamController {
@@ -29,13 +32,6 @@ impl StreamController {
             is_tls,
             timeout,
         }
-    }
-
-    pub async fn upgrade_to_tls(self, config: &TlsConfig) -> Result<Self, Error> {
-        let stream = self.reader.into_inner().unsplit(self.writer.into_inner());
-        let stream = timeout(self.timeout, stream.upgrade_to_tls(config)).await??;
-
-        Ok(Self::new(stream, self.timeout))
     }
 
     pub async fn write_line(&mut self, line: impl AsRef<str>) -> Result<(), Error> {

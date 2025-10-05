@@ -1,6 +1,5 @@
 use crate::core::auth::AuthMach;
-use crate::core::error::Error;
-use crate::core::tls::{TlsConfig, TlsMode};
+use crate::core::tls::TlsMode;
 use std::pin::Pin;
 use std::task::Poll;
 use std::time::Duration;
@@ -48,7 +47,7 @@ impl Default for SmtpConfig {
             appname: "smtpd-rs".to_string(),
             hostname,
             max_message_size: Some(10 * 1024 * 1024), // 10MB
-            timeout: Duration::from_secs(300), // 5M
+            timeout: Duration::from_secs(300),        // 5M
             max_recipients: 100,
             auth_machs: vec![],
             require_auth: false,
@@ -138,36 +137,6 @@ impl ConnectionStream {
             Self::Tcp(_) => false,
             #[cfg(not(any(feature = "native-tls-backend", feature = "rustls-backend")))]
             _ => false,
-        }
-    }
-
-    // TLS upgrade functions
-    pub async fn upgrade_to_tls(self, tls_config: &TlsConfig) -> Result<Self, Error> {
-        match self {
-            Self::Tcp(tcp_stream) => match tls_config {
-                #[cfg(feature = "native-tls-backend")]
-                TlsConfig::NativeTls(identity) => {
-                    use tokio_native_tls::{TlsAcceptor, native_tls};
-
-                    let acceptor = native_tls::TlsAcceptor::builder(identity.clone()).build()?;
-                    let acceptor = TlsAcceptor::from(acceptor);
-                    let stream = acceptor.accept(tcp_stream).await?;
-
-                    Ok(Self::NativeTls(stream))
-                }
-
-                #[cfg(feature = "rustls-backend")]
-                TlsConfig::Rustls(config) => {
-                    use std::sync::Arc;
-                    use tokio_rustls::TlsAcceptor;
-
-                    let acceptor = TlsAcceptor::from(Arc::new(config.clone()));
-                    let stream = acceptor.accept(tcp_stream).await?;
-
-                    Ok(Self::Rustls(stream))
-                }
-            },
-            _ => Ok(self),
         }
     }
 }
