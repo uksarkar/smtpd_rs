@@ -1,24 +1,44 @@
-use std::{borrow::Cow, fmt::Display};
+use std::borrow::Cow;
+use std::fmt::{self, Display, Formatter};
 
-#[derive(Debug, Clone, Default)]
+/// Represents an SMTP response that can be written to the client stream.
+///
+/// Each variant corresponds to a different style of reply.
+/// `Display` provides the formatted output suitable for SMTP wire protocol.
+///
+/// The `Default` variant represents “no reply” and should be skipped when writing.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum Response {
+    /// A no-op response, ignored when sending.
     #[default]
     Default,
+
+    /// Custom response with status code, message, and optional RFC code.
     Custom {
         status: usize,
         message: Cow<'static, str>,
         rfc: Option<Cow<'static, str>>,
     },
+
+    /// Standard 250 “OK” response.
     Ok(Cow<'static, str>),
+
+    /// 220 informational greeting or connection message.
     Info(Cow<'static, str>),
+
+    /// Raw response for full manual control.
     Raw(Cow<'static, str>),
 }
 
 impl Display for Response {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Response::Raw(s) => return write!(f, "{s}"),
-            Response::Custom { status, message, rfc } => {
+            Response::Raw(s) => write!(f, "{s}"),
+            Response::Custom {
+                status,
+                message,
+                rfc,
+            } => {
                 let rfc_suffix = rfc
                     .as_ref()
                     .filter(|s| !s.is_empty())
@@ -34,6 +54,7 @@ impl Display for Response {
 }
 
 impl Response {
+    /// Create a fully custom SMTP response.
     pub fn new(
         status: usize,
         message: impl Into<Cow<'static, str>>,
@@ -74,10 +95,8 @@ impl Response {
         Self::new(503, message, Some("5.5.1".into()))
     }
 
+    #[inline]
     pub fn is_default(&self) -> bool {
-        match self {
-            Self::Default => true,
-            _ => false
-        }
+        matches!(self, Self::Default)
     }
 }
