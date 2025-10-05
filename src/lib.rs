@@ -335,10 +335,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     }
                     "AUTH" => {
                         match get_auth_data(args, &mut session, &mut controller).await {
-                            Ok(()) => {
-                                // safe to unwrap, because the Ok() is guaranteed the data having some value
-                                let auth_data = session.auth_data.as_ref().unwrap();
-
+                            Ok(auth_data) => {
                                 match handler.handle_auth(&session, auth_data).await {
                                     Ok(res) => {
                                         session.authenticated = true;
@@ -549,7 +546,7 @@ async fn get_auth_data<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> std::result::Result<(), CoreError> {
+) -> std::result::Result<AuthData, CoreError> {
     if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
@@ -697,9 +694,7 @@ async fn get_auth_data<'a>(
         )));
     }
 
-    session.auth_data = data;
-
-    Ok(())
+    Ok(data.unwrap())
 }
 
 async fn handle_mail_cmd<'a>(

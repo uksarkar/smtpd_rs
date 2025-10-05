@@ -118,7 +118,7 @@ pub trait SmtpHandler: Send + Sync {
     /// - `Ok(Response::default())` to indicate successful authentication.
     /// - `Err(Error::Response(...))` to reject with a custom SMTP message.
     /// - `Err(Error::Abort)` to immediately terminate the connection.
-    async fn handle_auth(&mut self, _: &Session, _: &AuthData) -> Result {
+    async fn handle_auth(&mut self, _: &Session, _: AuthData) -> Result {
         Err(Error::Response(Response::not_implemented()))
     }
 

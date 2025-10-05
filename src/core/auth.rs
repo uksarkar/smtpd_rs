@@ -54,9 +54,7 @@ impl AuthMach {
 /// authentication mechanism. It is typically constructed internally by the
 /// SMTP server when the client issues an `AUTH` command.
 ///
-/// The resulting instance is accessible through the [`Session`](crate::core::session)'s
-/// [`auth_data`](crate::core::session::Session::auth_data) property and is passed directly
-/// to the [`SmtpHandler::handle_auth`](crate::core::handler::SmtpHandler::handle_auth) method.
+/// Passed to the [`SmtpHandler::handle_auth`](crate::core::handler::SmtpHandler::handle_auth) method.
 ///
 /// # Example
 ///
@@ -69,7 +67,7 @@ impl AuthMach {
 ///     fn handle_auth(
 ///         &mut self,
 ///         _session: &Session,
-///         data: &AuthData,
+///         data: AuthData,
 ///     ) -> Result<Response, Error> {
 ///         let (username, password, _) = data.data();
 ///

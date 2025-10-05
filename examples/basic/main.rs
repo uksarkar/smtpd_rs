@@ -24,7 +24,7 @@ impl smtpd_rs::SmtpHandler for MyHandler {
     async fn handle_auth(
         &mut self,
         _session: &smtpd_rs::Session,
-        data: &smtpd_rs::AuthData,
+        data: smtpd_rs::AuthData,
     ) -> Result<smtpd_rs::Response, smtpd_rs::Error> {
         let (username, password, _) = data.data();
 
