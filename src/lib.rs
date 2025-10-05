@@ -17,7 +17,7 @@ pub use crate::core::auth::{AuthData, AuthMach};
 use crate::core::error::Error as CoreError;
 pub use crate::core::handler::{SmtpHandler, SmtpHandlerFactory};
 pub use crate::core::response::Response;
-pub use crate::core::response_error::Error;
+pub use crate::core::response_error::{Error, Result};
 pub use crate::core::session::Session;
 use crate::core::stream::StreamController;
 pub use crate::core::tls::TlsConfig;
@@ -50,7 +50,7 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
     }
 
     /// Entry point: dispatch based on TLS mode
-    pub async fn listen_and_serve(self) -> Result<(), std::io::Error> {
+    pub async fn listen_and_serve(self) -> std::result::Result<(), std::io::Error> {
         match &self.config.tls_mode {
             TlsMode::Disabled => self.serve_plain().await,
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
@@ -61,7 +61,7 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
     }
 
     /// Plain TCP listener (STARTTLS optional handling done per session)
-    async fn serve_plain(self) -> Result<(), std::io::Error> {
+    async fn serve_plain(self) -> std::result::Result<(), std::io::Error> {
         let listener = TcpListener::bind(&self.config.bind_addr).await?;
         println!("SMTP server listening on {}", self.config.bind_addr);
 
@@ -112,7 +112,7 @@ impl<T: SmtpHandlerFactory + Send + Sync + 'static> SmtpServer<T> {
 
     /// Fully TLS listener (implicit TLS) — feature-gated
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
-    async fn serve_tls(self) -> Result<(), std::io::Error> {
+    async fn serve_tls(self) -> std::result::Result<(), std::io::Error> {
         use std::sync::Arc;
         use tokio::net::TcpListener;
 
@@ -179,7 +179,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))] provider: Option<
         Arc<TlsProvider>,
     >,
-) -> Result<(), CoreError> {
+) -> std::result::Result<(), CoreError> {
     let remote_host = if !config.disable_reverse_dns {
         get_remote_host(addr.ip(), &resolver).await
     } else {
@@ -512,7 +512,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
 pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
     config: SmtpConfig,
     handler: T,
-) -> Result<(), std::io::Error> {
+) -> std::result::Result<(), std::io::Error> {
     let server = SmtpServer::new(config, handler);
     server.listen_and_serve().await
 }
@@ -522,7 +522,7 @@ fn handle_start_tls_cmd<'a>(
     args: Option<&str>,
     controller: &StreamController,
     session: &Session<'a>,
-) -> Result<(), CoreError> {
+) -> std::result::Result<(), CoreError> {
     // Reject if arguments are provided
     if args.is_some_and(|s| !s.is_empty()) {
         return Err(CoreError::Response(Response::syntax_error(
@@ -549,7 +549,7 @@ async fn get_auth_data<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<(), CoreError> {
+) -> std::result::Result<(), CoreError> {
     if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
@@ -706,7 +706,7 @@ async fn handle_mail_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<(), CoreError> {
+) -> std::result::Result<(), CoreError> {
     if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
@@ -762,7 +762,7 @@ async fn handle_mail_cmd<'a>(
 async fn extract_rcpt_from_arg<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
-) -> Result<String, CoreError> {
+) -> std::result::Result<String, CoreError> {
     if session.smtp_config.tls_mode.tls_mandatory() && !session.tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",
@@ -802,7 +802,7 @@ async fn extract_rcpt_from_arg<'a>(
 async fn extract_mail_data<'a>(
     session: &mut Session<'a>,
     controller: &mut StreamController,
-) -> Result<Vec<u8>, CoreError> {
+) -> std::result::Result<Vec<u8>, CoreError> {
     if session.smtp_config.tls_mode.tls_mandatory() && !controller.is_tls {
         return Err(CoreError::Response(Response::reject(
             "Must issue a STARTTLS command first",

@@ -1,4 +1,4 @@
-use crate::{AuthData, Error, Response, Session};
+use crate::{AuthData, Error, Response, Result, Session};
 
 /// Defines the async hook interface for handling key SMTP events:
 /// authentication (`AUTH`), recipient validation (`RCPT TO`), and message delivery (`DATA`).
@@ -14,7 +14,7 @@ use crate::{AuthData, Error, Response, Session};
 /// # Example
 ///
 /// ```
-/// use smtpd_rs::{async_trait, SmtpHandler, SmtpHandlerFactory, Session, AuthData, Response, Error};
+/// use smtpd_rs::{async_trait, SmtpHandler, SmtpHandlerFactory, Session, AuthData, Response, Error, Result};
 ///
 /// struct MyHandler {
 ///     user_id: Option<usize>,
@@ -26,7 +26,7 @@ use crate::{AuthData, Error, Response, Session};
 ///         &mut self,
 ///         _session: &Session,
 ///         data: &AuthData,
-///     ) -> Result<Response, Error> {
+///     ) -> Result {
 ///         let (username, password, _) = data.data();
 ///
 ///         // Simulate authentication (could be a DB or API call)
@@ -42,7 +42,7 @@ use crate::{AuthData, Error, Response, Session};
 ///         &mut self,
 ///         _session: &Session,
 ///         to: &str,
-///     ) -> Result<Response, Error> {
+///     ) -> Result {
 ///         if to.ends_with("gmail.com") {
 ///             Ok(Response::default())
 ///         } else {
@@ -56,7 +56,7 @@ use crate::{AuthData, Error, Response, Session};
 ///         &mut self,
 ///         _session: &Session,
 ///         data: Vec<u8>,
-///     ) -> Result<Response, Error> {
+///     ) -> Result {
 ///         println!("Received message: {:?}", String::from_utf8_lossy(&data));
 ///         Ok(Response::ok("Ok: queued as <message-id>"))
 ///     }
@@ -118,7 +118,7 @@ pub trait SmtpHandler: Send + Sync {
     /// - `Ok(Response::default())` to indicate successful authentication.
     /// - `Err(Error::Response(...))` to reject with a custom SMTP message.
     /// - `Err(Error::Abort)` to immediately terminate the connection.
-    async fn handle_auth(&mut self, _: &Session, _: &AuthData) -> Result<Response, Error> {
+    async fn handle_auth(&mut self, _: &Session, _: &AuthData) -> Result {
         Err(Error::Response(Response::not_implemented()))
     }
 
@@ -128,7 +128,7 @@ pub trait SmtpHandler: Send + Sync {
     /// - `Ok(Response::default())` to accept the recipient.
     /// - `Ok(Response::ok("Ok: queued as <message-id>"))` to include a message ID.
     /// - `Err(Error::Response(...))` to reject the recipient.
-    async fn handle_rcpt(&mut self, _: &Session, _: &str) -> Result<Response, Error> {
+    async fn handle_rcpt(&mut self, _: &Session, _: &str) -> Result {
         Ok(Response::default())
     }
 
@@ -137,7 +137,7 @@ pub trait SmtpHandler: Send + Sync {
     /// Return:
     /// - `Ok(Response::default())` to accept the message.
     /// - `Err(Error::Response(...))` to reject with a custom SMTP response.
-    async fn handle_email(&mut self, _: &Session, _: Vec<u8>) -> Result<Response, Error> {
+    async fn handle_email(&mut self, _: &Session, _: Vec<u8>) -> Result {
         Ok(Response::default())
     }
 }
