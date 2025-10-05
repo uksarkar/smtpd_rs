@@ -1,0 +1,3 @@
+{
+    "rust-analyzer.cargo.features": ["native-tls-backend", "rustls-backend"]
+}
