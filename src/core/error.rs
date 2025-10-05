@@ -4,6 +4,39 @@ use tokio::time::error::Elapsed;
 
 use crate::Response;
 
+/// Represents the core error type used throughout the SMTP server.
+///
+/// This enum encapsulates all error cases that may occur during server operation,
+/// including network I/O failures, timeouts, and protocol-level issues.
+///
+/// Some variants (such as [`Response`]) are intended to be reported to the client
+/// — these are automatically written to the stream before the connection is closed,
+/// typically through a `try_into<Response>` conversion.  
+/// Other variants are propagated internally for logging or custom error handling
+/// within the server or user-defined handlers.
+///
+/// # Variants
+///
+/// - [`Io`] — Represents a standard I/O error during read or write operations.
+/// - [`InvalidLineEnding`] — Encountered when a client sends malformed line endings (non–`\r\n`).
+/// - [`MaxSizeExceeded`] — Message size exceeds the configured maximum.
+/// - [`UnrecognizedAuthMach`] — The client attempted an unsupported authentication mechanism.
+/// - [`InvalidTLSConfiguration`] — TLS configuration was invalid or incomplete.
+/// - [`Response`] — A protocol-level error intended to be sent back to the client.
+/// - [`DecodeErr`] — Base64 decoding failed during AUTH negotiation.
+/// - [`Timeout`] — A read or write operation timed out.
+/// - [`NativeTlsErr`] *(feature = "native-tls-backend")* — Error from the `native-tls` backend.
+///
+/// # Example
+///
+/// ```rust
+/// use smtpd_rs::{Error, Response};
+///
+/// fn example() -> Result<(), Error> {
+///     // Return a protocol response error
+///     Err(Error::Response(Response::bad_sequence("Invalid command order")))
+/// }
+/// ```
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
