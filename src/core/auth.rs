@@ -59,7 +59,7 @@ impl AuthMach {
 /// # Example
 ///
 /// ```
-/// use smtpd_rs::{SmtpHandler, Session, AuthData, Response, Error};
+/// use smtpd::{SmtpHandler, Session, AuthData, Response, Error};
 ///
 /// struct MyHandler;
 ///

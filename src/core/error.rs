@@ -30,7 +30,7 @@ use crate::Response;
 /// # Example
 ///
 /// ```rust
-/// use smtpd_rs::{Error, Response};
+/// use smtpd::{Error, Response};
 ///
 /// fn example() -> Result<(), Error> {
 ///     // Return a protocol response error

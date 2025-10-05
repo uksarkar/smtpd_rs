@@ -1,6 +1,6 @@
 # smtpd-rs
 
-`smtpd_rs` is an asynchronous, extensible SMTP server library built on top of `tokio`.
+`smtpd` is an asynchronous, extensible SMTP server library built on top of `tokio`.
 Inspired by [smtpd](https://github.com/mhale/smtpd).
 It provides flexible support for authentication, TLS, and custom handling
 of SMTP commands.
@@ -14,7 +14,7 @@ of SMTP commands.
 
 ### Example
 ```rust
-use smtpd_rs::{async_trait, start_server, SmtpConfig, AuthMach};
+use smtpd::{async_trait, start_server, SmtpConfig, AuthMach};
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -34,41 +34,41 @@ async fn main() -> Result<(), std::io::Error> {
 struct MyHandler {}
 
 #[async_trait]
-impl smtpd_rs::SmtpHandler for MyHandler {
+impl smtpd::SmtpHandler for MyHandler {
     async fn handle_auth(
         &mut self,
-        _session: &smtpd_rs::Session,
-        data: smtpd_rs::AuthData,
-    ) -> Result<smtpd_rs::Response, smtpd_rs::Error> {
+        _session: &smtpd::Session,
+        data: smtpd::AuthData,
+    ) -> Result<smtpd::Response, smtpd::Error> {
         let (username, password, _) = data.data();
 
         if username == "abc" && password == "efg" {
-            return Ok(smtpd_rs::Response::Default);
+            return Ok(smtpd::Response::Default);
         }
 
-        Err(smtpd_rs::Error::Abort)
+        Err(smtpd::Error::Abort)
     }
 
     async fn handle_rcpt(
         &mut self,
-        _session: &smtpd_rs::Session,
+        _session: &smtpd::Session,
         to: &str,
-    ) -> Result<smtpd_rs::Response, smtpd_rs::Error> {
+    ) -> Result<smtpd::Response, smtpd::Error> {
         // allow recipients only from gmail
         if to.ends_with("gmail.com") {
-            return Ok(smtpd_rs::Response::Default);
+            return Ok(smtpd::Response::Default);
         }
 
-        Err(smtpd_rs::Error::Abort)
+        Err(smtpd::Error::Abort)
     }
 }
 
 struct MyHandlerFactory;
 
-impl smtpd_rs::SmtpHandlerFactory for MyHandlerFactory {
+impl smtpd::SmtpHandlerFactory for MyHandlerFactory {
     type Handler = MyHandler;
 
-    fn new_handler(&self, _session: &smtpd_rs::Session) -> Self::Handler {
+    fn new_handler(&self, _session: &smtpd::Session) -> Self::Handler {
         MyHandler {}
     }
 }

@@ -22,7 +22,7 @@ use crate::{
 ///
 /// Using `native-tls-backend`:
 /// ```
-/// use smtpd_rs::{Identity, TlsConfig, TlsMode, SmtpConfig, AuthMach};
+/// use smtpd::{Identity, TlsConfig, TlsMode, SmtpConfig, AuthMach};
 ///
 /// let identity = Identity::default();
 /// let tls_config = TlsConfig::NativeTls(identity);
@@ -38,7 +38,7 @@ use crate::{
 ///
 /// Using `rustls-backend`:
 /// ```
-/// use smtpd_rs::{ServerConfig, TlsConfig, TlsMode, SmtpConfig, AuthMach};
+/// use smtpd::{ServerConfig, TlsConfig, TlsMode, SmtpConfig, AuthMach};
 ///
 /// let rustls_config = ServerConfig::default();
 /// let tls_config = TlsConfig::Rustls(rustls_config);
@@ -152,7 +152,7 @@ impl TlsProvider {
 /// # Examples
 ///
 /// ```rust
-/// use smtpd_rs::{TlsMode, TlsConfig, Identity};
+/// use smtpd::{TlsMode, TlsConfig, Identity};
 ///
 /// // Explicit TLS (STARTTLS supported but optional)
 /// let tls_config = TlsConfig::NativeTls(Identity::default());

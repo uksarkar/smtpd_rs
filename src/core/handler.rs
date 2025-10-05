@@ -14,7 +14,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 /// # Example
 ///
 /// ```
-/// use smtpd_rs::{async_trait, SmtpHandler, SmtpHandlerFactory, Session, AuthData, Response, Error, Result};
+/// use smtpd::{async_trait, SmtpHandler, SmtpHandlerFactory, Session, AuthData, Response, Error, Result};
 ///
 /// struct MyHandler {
 ///     user_id: Option<usize>,
@@ -95,7 +95,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 /// ## Example Factory Relationship
 ///
 /// ```
-/// use smtpd_rs::{SmtpHandlerFactory, SmtpHandler, Session};
+/// use smtpd::{SmtpHandlerFactory, SmtpHandler, Session};
 ///
 /// struct MyHandler { user_id: Option<usize> }
 ///
@@ -148,7 +148,7 @@ pub trait SmtpHandler: Send + Sync {
 /// Each connection gets its own handler instance for isolation and state management.
 ///
 /// ```rust
-/// use smtpd_rs::{SmtpHandlerFactory, SmtpHandler, Session};
+/// use smtpd::{SmtpHandlerFactory, SmtpHandler, Session};
 ///
 /// struct MyHandler;
 /// struct MyFactory;

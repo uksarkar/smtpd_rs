@@ -1,7 +1,13 @@
 [package]
-name = "smtpd-rs"
+name = "smtpd"
 version = "0.1.0"
 edition = "2024"
+authors = ["Utpal Sarkar <utpalsarkar010@gmail.com>"]
+repository = "https://github.com/uksarkar/smtpd_rs"
+license = "MIT OR Apache-2.0"
+description = "Asynchronous, extensible SMTP server library built on Tokio"
+keywords = ["smtp", "smtpd", "smtpd_rs", "server", "mail", "email"]
+categories = ["network-programming", "asynchronous", "protocols"]
 
 [dependencies]
 async-trait = "0.1.89"

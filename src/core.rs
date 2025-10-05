@@ -24,7 +24,7 @@ pub mod tls;
 /// # Example
 ///
 /// ```
-/// use smtpd_rs::{SmtpConfig, AuthMach, start_server};
+/// use smtpd::{SmtpConfig, AuthMach, start_server};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
