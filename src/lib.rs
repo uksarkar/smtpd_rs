@@ -238,6 +238,7 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                 let res: Response = e.try_into()?;
                                 if !res.is_default() {
                                     controller.write_response(&res).await?;
+                                    break;
                                 }
                             }
                         };
@@ -331,50 +332,65 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                                 // safe to unwrap, because the Ok() is guaranteed the data having some value
                                 let auth_data = session.auth_data.as_ref().unwrap();
 
-                                let resp = match handler.handle_auth(&session, auth_data) {
+                                match handler.handle_auth(&session, auth_data) {
                                     Ok(res) => {
                                         session.authenticated = true;
-
-                                        if res.is_default() {
-                                            Response::auth_successful()
-                                        } else {
-                                            res
-                                        }
+                                        controller
+                                            .write_response(&if res.is_default() {
+                                                Response::auth_successful()
+                                            } else {
+                                                res
+                                            })
+                                            .await?;
                                     }
-                                    Err(e) => match e {
-                                        Error::Response(res) if !res.is_default() => res,
-                                        _ => Response::Raw(
-                                            "535 5.7.8 Authentication credentials invalid".into(),
-                                        ),
-                                    },
+                                    Err(e) => {
+                                        controller
+                                            .write_response(&match e {
+                                                Error::Response(res) if !res.is_default() => res,
+                                                _ => Response::Raw(
+                                                    "535 5.7.8 Authentication credentials invalid"
+                                                        .into(),
+                                                ),
+                                            })
+                                            .await?;
+                                        break;
+                                    }
                                 };
-
-                                controller.write_response(&resp).await?;
                             }
                             Err(err) => {
                                 let res: Response = err.try_into()?;
                                 controller.write_response(&res).await?;
+                                break;
                             }
                         };
                     }
                     "DATA" => {
                         match extract_mail_data(&mut session, &mut controller).await {
                             Ok(data) => {
-                                let res = match handler.handle_email(&session, data) {
-                                    Ok(r) if !r.is_default() => r,
-                                    Ok(_) => Response::ok("Ok: queued"),
-                                    Err(e) => match e {
+                                match handler.handle_email(&session, data) {
+                                    Ok(r) => {
+                                        controller
+                                            .write_response(&if r.is_default() {
+                                                Response::ok("Ok: queued")
+                                            } else {
+                                                r
+                                            })
+                                            .await?;
+                                    }
+                                    Err(e) => {
+                                        controller.write_response(&match e {
                                         Error::Response(res) if !res.is_default() => res,
                                         _ => Response::Raw("451 4.3.0 Requested action aborted: local error in processing"
                                         .into())
+                                    }).await?;
+                                        break;
                                     }
                                 };
-
-                                controller.write_response(&res).await?;
                             }
                             Err(err) => {
                                 let res: Response = err.try_into()?;
                                 controller.write_response(&res).await?;
+                                break;
                             }
                         };
                     }
@@ -433,31 +449,33 @@ async fn handle_client<T: SmtpHandlerFactory + Send + Sync + 'static>(
                     "RCPT" => {
                         match extract_rcpt_from_arg(args, &mut session).await {
                             Ok(to) => {
-                                let res = match handler.handle_rcpt(&session, &to) {
+                                match handler.handle_rcpt(&session, &to) {
                                     Ok(res) => {
                                         session.to.push(to);
 
-                                        if res.is_default() {
-                                            Response::Raw("250 2.1.5 Ok".into())
-                                        } else {
-                                            res
-                                        }
+                                        controller
+                                            .write_response(&if res.is_default() {
+                                                Response::Raw("250 2.1.5 Ok".into())
+                                            } else {
+                                                res
+                                            })
+                                            .await?;
                                     }
                                     Err(e) => {
-                                        match e {
+                                        controller.write_response(&match e {
                                             Error::Response(res) if !res.is_default() => res,
                                             _ => Response::Raw("550 5.1.0 Requested action not taken: mailbox unavailable"
                                             .into()),
-                                        }
+                                        }).await?;
+                                        break;
                                     }
                                 };
-
-                                controller.write_response(&res).await?;
                             }
 
                             Err(err) => {
                                 let res: Response = err.try_into()?;
                                 controller.write_response(&res).await?;
+                                break;
                             }
                         };
                     }
