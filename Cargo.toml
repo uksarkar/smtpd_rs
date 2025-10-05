@@ -10,6 +10,13 @@ license = "MIT OR Apache-2.0"
 description = "Asynchronous, extensible SMTP server library built on Tokio"
 keywords = ["smtp", "smtpd", "smtpd_rs", "server", "mail", "email"]
 categories = ["network-programming", "asynchronous", "protocols"]
+exclude = [
+    ".vscode/",
+    "*.orig",
+    ".gitignore",
+    ".cargo_vcs_info.json",
+    "Cargo.lock",
+]
 
 [dependencies]
 async-trait = "0.1.89"
