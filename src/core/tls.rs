@@ -7,6 +7,48 @@ use crate::{
     core::{ConnectionStream, error::Error},
 };
 
+/// Represents the TLS configuration for the SMTP server.
+///
+/// The exact variant depends on the enabled feature:
+/// - `native-tls-backend`: uses `native_tls::Identity`
+/// - `rustls-backend`: uses `rustls::ServerConfig`
+///
+/// This crate re-exports `Identity` and `ServerConfig` depending on the feature,
+/// so consumers do not need to install them separately.
+///
+/// # Examples
+///
+/// Using `native-tls-backend`:
+/// ```
+/// use smtpd_rs::{Identity, TlsConfig, TlsMode, SmtpConfig, AuthMach};
+///
+/// let identity = Identity::default();
+/// let tls_config = TlsConfig::NativeTls(identity);
+///
+/// let config = SmtpConfig {
+///     bind_addr: "127.0.0.1:2525".to_string(),
+///     require_auth: true,
+///     tls_mode: TlsMode::Required(tls_config),
+///     auth_machs: vec![AuthMach::Plain, AuthMach::Login],
+///     ..Default::default()
+/// };
+/// ```
+///
+/// Using `rustls-backend`:
+/// ```
+/// use smtpd_rs::{ServerConfig, TlsConfig, TlsMode, SmtpConfig, AuthMach};
+///
+/// let rustls_config = ServerConfig::default();
+/// let tls_config = TlsConfig::Rustls(rustls_config);
+///
+/// let config = SmtpConfig {
+///     bind_addr: "127.0.0.1:2525".to_string(),
+///     require_auth: true,
+///     tls_mode: TlsMode::Required(tls_config),
+///     auth_machs: vec![AuthMach::Plain, AuthMach::Login],
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Clone)]
 pub enum TlsConfig {
     #[cfg(feature = "native-tls-backend")]
@@ -21,12 +63,21 @@ impl core::fmt::Debug for TlsConfig {
         match self {
             #[cfg(feature = "native-tls-backend")]
             Self::NativeTls(_) => write!(f, "TlsConfig::NativeTls(<identity>)"),
+
             #[cfg(feature = "rustls-backend")]
             Self::Rustls(_) => write!(f, "TlsConfig::Rustls(<config>)"),
+
+            #[allow(unreachable_patterns)]
+            _ => Err(core::fmt::Error),
         }
     }
 }
 
+/// Internal TLS acceptor wrapper used to avoid rebuilding the acceptor
+/// for each incoming connection. The acceptor is created once from a
+/// [`TlsConfig`] and reused.
+///
+/// This ensures better performance and proper TLS handshakes per connection.
 #[derive(Clone)]
 pub(crate) enum TlsProvider {
     #[cfg(feature = "native-tls-backend")]
@@ -43,6 +94,9 @@ impl core::fmt::Debug for TlsProvider {
             Self::NativeTls(_) => f.write_str("TlsProvider::NativeTls"),
             #[cfg(feature = "rustls-backend")]
             Self::Rustls(_) => f.write_str("TlsProvider::Rustls"),
+
+            #[allow(unreachable_patterns)]
+            _ => Err(core::fmt::Error),
         }
     }
 }
@@ -73,6 +127,8 @@ impl TryFrom<&TlsConfig> for TlsProvider {
 }
 
 impl TlsProvider {
+    /// Performs a TLS handshake on the given TCP stream, returning a
+    /// `ConnectionStream` with the negotiated TLS connection.
     pub async fn accept(&self, stream: TcpStream) -> Result<ConnectionStream, Error> {
         match self {
             #[cfg(feature = "native-tls-backend")]
@@ -88,27 +144,47 @@ impl TlsProvider {
         }
     }
 }
-
-#[derive(Debug, Clone)]
+/// Specifies the TLS mode for the SMTP server.
+///
+/// This enum controls how TLS is applied to connections. Depending on the variant, TLS
+/// may be disabled, optional, required, or always-on (implicit).  
+///
+/// # Examples
+///
+/// ```rust
+/// use smtpd_rs::{TlsMode, TlsConfig, Identity};
+///
+/// // Explicit TLS (STARTTLS supported but optional)
+/// let tls_config = TlsConfig::NativeTls(Identity::default());
+/// let mode = TlsMode::Explicit(tls_config);
+///
+/// // Required TLS (STARTTLS mandatory)
+/// let required_mode = TlsMode::Required(tls_config.clone());
+///
+/// // Implicit TLS (SMTPS style)
+/// let implicit_mode = TlsMode::Implicit(tls_config);
+/// ```
+#[derive(Debug, Clone, Default)]
 pub enum TlsMode {
-    /// No TLS support at all
+    /// No TLS support.
+    #[default]
     Disabled,
 
-    /// Explicit TLS (STARTTLS supported, but optional)
+    /// Explicit TLS (STARTTLS supported but optional)
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     Explicit(TlsConfig),
 
-    /// Required TLS via STARTTLS (all commands except NOOP, EHLO, STARTTLS, QUIT must be over TLS)
+    /// Required TLS via STARTTLS (all commands except NOOP, EHLO, STARTTLS, QUIT must use TLS)
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     Required(TlsConfig),
 
-    /// Implicit TLS (always TLS, like SMTPS on port 465)
+    /// Implicit TLS (always TLS, e.g., SMTPS on port 465)
     #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
     Implicit(TlsConfig),
 }
 
 impl TlsMode {
-    /// Returns whether this mode involves TLS at all
+    /// Returns true if this mode involves TLS at all.
     pub fn has_tls(&self) -> bool {
         match self {
             Self::Disabled => false,
@@ -117,7 +193,7 @@ impl TlsMode {
         }
     }
 
-    /// Returns the TLS configuration if applicable
+    /// Returns a reference to the TLS configuration if TLS is enabled.
     pub fn config(&self) -> Option<&TlsConfig> {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
@@ -126,7 +202,7 @@ impl TlsMode {
         }
     }
 
-    /// Returns whether the server starts TLS immediately (Direct mode)
+    /// Returns true if TLS is enabled immediately upon connection (Direct TLS / SMTPS).
     pub fn is_direct_tls(&self) -> bool {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
@@ -135,7 +211,7 @@ impl TlsMode {
         }
     }
 
-    /// Returns whether the client may start TLS (Opportunistic or Required)
+    /// Returns true if the client may initiate TLS via STARTTLS (Explicit or Required).
     pub fn allows_starttls(&self) -> bool {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
@@ -144,7 +220,7 @@ impl TlsMode {
         }
     }
 
-    /// Returns whether TLS is mandatory for commands (Required)
+    /// Returns true if TLS is mandatory for all commands (Required TLS mode).
     pub fn tls_mandatory(&self) -> bool {
         match self {
             #[cfg(any(feature = "native-tls-backend", feature = "rustls-backend"))]
