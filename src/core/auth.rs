@@ -116,3 +116,45 @@ impl AuthData {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn displays_auth_mach_variants_correctly() {
+        let variants = [AuthMach::Plain, AuthMach::Login, AuthMach::CramMD5];
+        let expected = ["PLAIN", "LOGIN", "CRAM-MD5"];
+
+        let actual: Vec<_> = variants.iter().map(ToString::to_string).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn extracts_correct_auth_mach_from_str() {
+        let tests: HashMap<&str, (AuthMach, Option<&str>)> = HashMap::from([
+            ("LOGIN", (AuthMach::Login, None)),
+            ("PLAIN", (AuthMach::Plain, None)),
+            ("LOGIN username", (AuthMach::Login, Some("username"))),
+            ("plain username", (AuthMach::Plain, Some("username"))),
+            ("CRAM-MD5", (AuthMach::CramMD5, None)),
+        ]);
+
+        for (input, (expected_variant, expected_arg)) in tests {
+            let result = AuthMach::from_str(input);
+            assert!(result.is_ok(), "Expected Some(..) for input: {}", input);
+
+            let (variant, arg) = result.unwrap();
+            assert_eq!(
+                variant, expected_variant,
+                "Variant mismatch for input: {}",
+                input
+            );
+            assert_eq!(arg, expected_arg, "Argument mismatch for input: {}", input);
+        }
+
+        let result = AuthMach::from_str("");
+        assert!(result.is_err());
+    }
+}
