@@ -22,34 +22,42 @@ use crate::{
 ///
 /// Using `native-tls-backend`:
 /// ```
+/// #![cfg(feature = "native-tls-backend")]
 /// use smtpd::{Identity, TlsConfig, TlsMode, SmtpConfig, AuthMach};
 ///
-/// let identity = Identity::default();
-/// let tls_config = TlsConfig::NativeTls(identity);
-///
-/// let config = SmtpConfig {
-///     bind_addr: "127.0.0.1:2525".to_string(),
-///     require_auth: true,
-///     tls_mode: TlsMode::Required(tls_config),
-///     auth_machs: vec![AuthMach::Plain, AuthMach::Login],
-///     ..Default::default()
-/// };
+/// #[tokio::main]
+/// async fn main() -> Result<(), std::io::Error> {
+///     let identity = Identity::default();
+///     let tls_config = TlsConfig::NativeTls(identity);
+/// 
+///     let config = SmtpConfig {
+///         bind_addr: "127.0.0.1:2525".to_string(),
+///         require_auth: true,
+///         tls_mode: TlsMode::Required(tls_config),
+///         auth_machs: vec![AuthMach::Plain, AuthMach::Login],
+///         ..Default::default()
+///     };
+/// }
 /// ```
 ///
 /// Using `rustls-backend`:
 /// ```
+/// #![cfg(feature = "rustls-backend")]
 /// use smtpd::{ServerConfig, TlsConfig, TlsMode, SmtpConfig, AuthMach};
 ///
-/// let rustls_config = ServerConfig::default();
-/// let tls_config = TlsConfig::Rustls(rustls_config);
-///
-/// let config = SmtpConfig {
-///     bind_addr: "127.0.0.1:2525".to_string(),
-///     require_auth: true,
-///     tls_mode: TlsMode::Required(tls_config),
-///     auth_machs: vec![AuthMach::Plain, AuthMach::Login],
-///     ..Default::default()
-/// };
+/// #[tokio::main]
+/// async fn main() -> Result<(), std::io::Error> {
+///     let rustls_config = ServerConfig::default();
+///     let tls_config = TlsConfig::Rustls(rustls_config);
+/// 
+///     let config = SmtpConfig {
+///         bind_addr: "127.0.0.1:2525".to_string(),
+///         require_auth: true,
+///         tls_mode: TlsMode::Required(tls_config),
+///         auth_machs: vec![AuthMach::Plain, AuthMach::Login],
+///         ..Default::default()
+///     };
+/// }
 /// ```
 #[derive(Clone)]
 pub enum TlsConfig {
@@ -152,6 +160,7 @@ impl TlsProvider {
 /// # Examples
 ///
 /// ```rust
+/// #![cfg(feature = "native-tls-backend")]
 /// use smtpd::{TlsMode, TlsConfig, Identity};
 ///
 /// // Explicit TLS (STARTTLS supported but optional)

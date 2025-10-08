@@ -59,16 +59,17 @@ impl AuthMach {
 /// # Example
 ///
 /// ```
-/// use smtpd::{SmtpHandler, Session, AuthData, Response, Error};
+/// use smtpd::{async_trait, SmtpHandler, Session, AuthData, Result, Response, Error};
 ///
 /// struct MyHandler;
 ///
+/// #[async_trait]
 /// impl SmtpHandler for MyHandler {
-///     fn handle_auth(
+///     async fn handle_auth(
 ///         &mut self,
 ///         _session: &Session,
 ///         data: AuthData,
-///     ) -> Result<Response, Error> {
+///     ) -> Result {
 ///         let (username, password, _) = data.data();
 ///
 ///         if username == "abc" && password == "efg" {

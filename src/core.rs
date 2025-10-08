@@ -23,8 +23,8 @@ pub mod tls;
 ///
 /// # Example
 ///
-/// ```
-/// use smtpd::{SmtpConfig, AuthMach, start_server};
+/// ```no_run
+/// use smtpd::{async_trait, Session, SmtpHandler, SmtpHandlerFactory, SmtpConfig, AuthMach, start_server};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,9 +35,24 @@ pub mod tls;
 ///         ..Default::default()
 ///     };
 ///
-///     let factory = MyHandlerFactory {};
+///     let factory = MyHandlerFactory;
 ///     start_server(config, factory).await?;
 ///     Ok(())
+/// }
+/// 
+/// struct MyHandler;
+/// 
+/// #[async_trait]
+/// impl SmtpHandler for MyHandler{}
+///
+/// struct MyHandlerFactory;
+///
+/// impl SmtpHandlerFactory for MyHandlerFactory {
+///     type Handler = MyHandler;
+///
+///     fn new_handler(&self, _session: &Session) -> Self::Handler {
+///         MyHandler
+///     }
 /// }
 /// ```
 ///

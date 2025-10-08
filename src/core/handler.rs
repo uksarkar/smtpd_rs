@@ -25,7 +25,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 ///     async fn handle_auth(
 ///         &mut self,
 ///         _session: &Session,
-///         data: &AuthData,
+///         data: AuthData,
 ///     ) -> Result {
 ///         let (username, password, _) = data.data();
 ///
@@ -46,7 +46,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 ///         if to.ends_with("gmail.com") {
 ///             Ok(Response::default())
 ///         } else {
-///             Err(Error::Response(Response::invalid_recipient(
+///             Err(Error::Response(Response::reject(
 ///                 "Only Gmail addresses allowed",
 ///             )))
 ///         }
@@ -68,7 +68,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 ///     type Handler = MyHandler;
 ///
 ///     fn new_handler(&self, _session: &Session) -> Self::Handler {
-///         MyHandler { user_id: 0, account_id: 0 }
+///         MyHandler { user_id: None }
 ///     }
 /// }
 /// ```
@@ -95,9 +95,12 @@ use crate::{AuthData, Error, Response, Result, Session};
 /// ## Example Factory Relationship
 ///
 /// ```
-/// use smtpd::{SmtpHandlerFactory, SmtpHandler, Session};
+/// use smtpd::{async_trait, SmtpHandlerFactory, SmtpHandler, Session};
 ///
 /// struct MyHandler { user_id: Option<usize> }
+/// 
+/// #[async_trait]
+/// impl SmtpHandler for MyHandler{}
 ///
 /// struct MyFactory;
 ///
@@ -148,9 +151,13 @@ pub trait SmtpHandler: Send + Sync {
 /// Each connection gets its own handler instance for isolation and state management.
 ///
 /// ```rust
-/// use smtpd::{SmtpHandlerFactory, SmtpHandler, Session};
+/// use smtpd::{async_trait, SmtpHandlerFactory, SmtpHandler, Session};
 ///
 /// struct MyHandler;
+/// 
+/// #[async_trait]
+/// impl SmtpHandler for MyHandler {}
+/// 
 /// struct MyFactory;
 ///
 /// impl SmtpHandlerFactory for MyFactory {

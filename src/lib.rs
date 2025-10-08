@@ -164,7 +164,7 @@ pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
 /// # Example
 ///
 /// ```rust
-/// use smtpd::{SmtpServer, start_server, SmtpConfig, MyHandlerFactory};
+/// use smtpd::{async_trait, SmtpServer, start_server, SmtpConfig, SmtpHandler, SmtpHandlerFactory};
 ///
 /// let config = SmtpConfig {
 ///     bind_addr: "127.0.0.1:2525".to_string(),
@@ -174,6 +174,21 @@ pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
 ///
 /// let factory = MyHandlerFactory {};
 /// start_server(config, factory).await?;
+/// 
+/// struct MyHandler {}
+/// 
+/// #[async_trait]
+/// impl SmtpHandler for MyHandler{}
+/// 
+/// struct MyHandlerFactory;
+///
+/// impl SmtpHandlerFactory for MyHandlerFactory {
+///     type Handler = MyHandler;
+///
+///     fn new_handler(&self, _session: &smtpd::Session) -> Self::Handler {
+///         MyHandler {}
+///     }
+/// }
 /// ```
 pub struct SmtpServer<T: SmtpHandlerFactory + Send + Sync + 'static> {
     config: SmtpConfig,
