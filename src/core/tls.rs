@@ -21,33 +21,31 @@ use crate::{
 /// # Examples
 ///
 /// Using `native-tls-backend`:
-/// ```
-/// #![cfg(feature = "native-tls-backend")]
-/// use smtpd::{Identity, TlsConfig, TlsMode, SmtpConfig, AuthMach};
+/// ```no_run
+/// use smtpd::{TlsConfig, TlsMode, SmtpConfig, AuthMach};
 ///
-/// #[tokio::main]
-/// async fn main() -> Result<(), std::io::Error> {
-///     let identity = Identity::default();
+/// # #[cfg(feature = "native-tls-backend")]
+/// # {
+///     let identity = smtpd::Identity::default();
 ///     let tls_config = TlsConfig::NativeTls(identity);
 /// 
-///     let config = SmtpConfig {
+///     let _config = SmtpConfig {
 ///         bind_addr: "127.0.0.1:2525".to_string(),
 ///         require_auth: true,
 ///         tls_mode: TlsMode::Required(tls_config),
 ///         auth_machs: vec![AuthMach::Plain, AuthMach::Login],
 ///         ..Default::default()
 ///     };
-/// }
+/// # }
 /// ```
 ///
-/// Using `rustls-backend`:
-/// ```
-/// #![cfg(feature = "rustls-backend")]
-/// use smtpd::{ServerConfig, TlsConfig, TlsMode, SmtpConfig, AuthMach};
+/// Using rustls-backend:
+/// ```no_run
+/// use smtpd::{TlsConfig, TlsMode, SmtpConfig, AuthMach};
 ///
-/// #[tokio::main]
-/// async fn main() -> Result<(), std::io::Error> {
-///     let rustls_config = ServerConfig::default();
+/// # #[cfg(feature = "rustls-backend")]
+/// # {
+///     let rustls_config = smtpd::ServerConfig::default();
 ///     let tls_config = TlsConfig::Rustls(rustls_config);
 /// 
 ///     let config = SmtpConfig {
@@ -57,7 +55,7 @@ use crate::{
 ///         auth_machs: vec![AuthMach::Plain, AuthMach::Login],
 ///         ..Default::default()
 ///     };
-/// }
+/// # }
 /// ```
 #[derive(Clone)]
 pub enum TlsConfig {
@@ -159,8 +157,9 @@ impl TlsProvider {
 ///
 /// # Examples
 ///
-/// ```rust
-/// #![cfg(feature = "native-tls-backend")]
+/// ```no_run
+/// # #[cfg(feature = "native-tls-backend")]
+/// # {
 /// use smtpd::{TlsMode, TlsConfig, Identity};
 ///
 /// // Explicit TLS (STARTTLS supported but optional)
@@ -172,6 +171,7 @@ impl TlsProvider {
 ///
 /// // Implicit TLS (SMTPS style)
 /// let implicit_mode = TlsMode::Implicit(tls_config);
+/// # }
 /// ```
 #[derive(Debug, Clone, Default)]
 pub enum TlsMode {

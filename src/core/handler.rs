@@ -13,7 +13,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use smtpd::{async_trait, SmtpHandler, SmtpHandlerFactory, Session, AuthData, Response, Error, Result};
 ///
 /// struct MyHandler {
@@ -35,7 +35,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 ///             return Ok(Response::default());
 ///         }
 ///
-///         Err(Error::Response(Response::auth_failed("Invalid credentials")))
+///         Err(Error::Response(Response::reject("Invalid credentials")))
 ///     }
 ///
 ///     async fn handle_rcpt(
@@ -94,7 +94,7 @@ use crate::{AuthData, Error, Response, Result, Session};
 ///
 /// ## Example Factory Relationship
 ///
-/// ```
+/// ```no_run
 /// use smtpd::{async_trait, SmtpHandlerFactory, SmtpHandler, Session};
 ///
 /// struct MyHandler { user_id: Option<usize> }
@@ -150,7 +150,7 @@ pub trait SmtpHandler: Send + Sync {
 /// Implement this trait to provide your custom handler factory.
 /// Each connection gets its own handler instance for isolation and state management.
 ///
-/// ```rust
+/// ```no_run
 /// use smtpd::{async_trait, SmtpHandlerFactory, SmtpHandler, Session};
 ///
 /// struct MyHandler;

@@ -126,8 +126,8 @@ mod utils;
 ///
 /// # Example
 ///
-/// ```rust
-/// use smtpd::{start_server, SmtpConfig, AuthMach, MyHandlerFactory};
+/// ```no_run
+/// use smtpd::{async_trait, start_server, SmtpConfig, AuthMach, SmtpHandler, SmtpHandlerFactory};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), std::io::Error> {
@@ -145,6 +145,20 @@ mod utils;
 ///
 ///     Ok(())
 /// }
+/// 
+/// struct MyHandler{}
+/// 
+/// #[async_trait]
+/// impl SmtpHandler for MyHandler{}
+/// 
+/// struct MyHandlerFactory{}
+/// impl SmtpHandlerFactory for MyHandlerFactory {
+///     type Handler = MyHandler;
+/// 
+///     fn new_handler(&self, _session: &smtpd::Session) -> Self::Handler {
+///         MyHandler{}
+///     }
+/// }
 /// ```
 pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
     config: SmtpConfig,
@@ -160,36 +174,6 @@ pub async fn start_server<T: SmtpHandlerFactory + Send + Sync + 'static>(
 /// construct an `SmtpServer` instance manually and call its methods directly, the recommended
 /// approach is to use the [`start_server`] helper function. This function will internally
 /// create the server and invoke [`SmtpServer::listen_and_serve`] for you.
-///
-/// # Example
-///
-/// ```rust
-/// use smtpd::{async_trait, SmtpServer, start_server, SmtpConfig, SmtpHandler, SmtpHandlerFactory};
-///
-/// let config = SmtpConfig {
-///     bind_addr: "127.0.0.1:2525".to_string(),
-///     require_auth: true,
-///     ..Default::default()
-/// };
-///
-/// let factory = MyHandlerFactory {};
-/// start_server(config, factory).await?;
-/// 
-/// struct MyHandler {}
-/// 
-/// #[async_trait]
-/// impl SmtpHandler for MyHandler{}
-/// 
-/// struct MyHandlerFactory;
-///
-/// impl SmtpHandlerFactory for MyHandlerFactory {
-///     type Handler = MyHandler;
-///
-///     fn new_handler(&self, _session: &smtpd::Session) -> Self::Handler {
-///         MyHandler {}
-///     }
-/// }
-/// ```
 pub struct SmtpServer<T: SmtpHandlerFactory + Send + Sync + 'static> {
     config: SmtpConfig,
     handler: Arc<T>,
@@ -758,16 +742,6 @@ fn handle_start_tls_cmd<'a>(
 /// - Unsupported or unrecognized authentication mechanism (`"504 5.5.4 Unrecognized authentication type"`).
 /// - Parsing errors or invalid credential format (`"Syntax error (unable to parse)"` or `"Authentication cancelled"`).
 /// - Authentication failed after parsing credentials (`"Authentication credentials invalid"`).
-///
-/// # Example
-/// ```no_run
-/// # use smtpd::{Session, StreamController, get_auth_data};
-/// # async fn example(mut session: Session<'_>, mut controller: StreamController) {
-/// let args = Some("PLAIN dGVzdAB0ZXN0ADEyMw=="); // example base64-encoded credentials
-/// let auth_data = get_auth_data(args, &mut session, &mut controller).await?;
-/// // `auth_data` now contains username and password
-/// # }
-/// ```
 async fn get_auth_data<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
@@ -949,14 +923,6 @@ async fn get_auth_data<'a>(
 /// - Invalid SIZE parameter (`"Invalid SIZE parameter"`).
 /// - Message exceeds configured maximum size (`"Max size limit (<max_size>) exceeded"`).
 ///
-/// # Example
-/// ```no_run
-/// # use smtpd::{Session, StreamController, handle_mail_cmd};
-/// # async fn example(mut session: Session<'_>, mut controller: StreamController) {
-/// let args = Some("FROM:<alice@example.com> SIZE=1024");
-/// handle_mail_cmd(args, &mut session, &mut controller).await?;
-/// # }
-/// ```
 async fn handle_mail_cmd<'a>(
     args: Option<&str>,
     session: &mut Session<'a>,
